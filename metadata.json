@@ -1,0 +1,6 @@
+{
+  "name": "Meeting Room EC",
+  "description": "ระบบจัดการห้องประชุม ซิงค์ Google Calendar แดชบอร์ดเรียลไทม์ และลิงก์การโทร (Meet/Teams/Zoom)",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,109 @@
+{
+  "entities": {
+    "UserAccount": {
+      "title": "UserAccount",
+      "description": "User profile and role information",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "The user's Auth UID"
+        },
+        "email": {
+          "type": "string",
+          "description": "Google email address"
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Full name"
+        },
+        "nickname": {
+          "type": "string",
+          "description": "Short nickname"
+        },
+        "role": {
+          "type": "string",
+          "enum": ["admin", "employee"],
+          "description": "Access level"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "email", "displayName", "nickname", "role"]
+    },
+    "Booking": {
+      "title": "Booking",
+      "description": "Meeting room booking record",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "roomId": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "startTime": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "endTime": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "meetingType": {
+          "type": "string",
+          "enum": ["onsite", "meet"]
+        },
+        "meetingLink": {
+          "type": "string"
+        },
+        "googleEventId": {
+          "type": "string"
+        },
+        "creatorEmail": {
+          "type": "string"
+        },
+        "creatorName": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["pending", "approved", "rejected"]
+        },
+        "rejectedReason": {
+          "type": "string"
+        },
+        "approvedBy": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["roomId", "title", "startTime", "endTime", "meetingType", "creatorEmail", "creatorName", "status", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": {
+        "$ref": "#/entities/UserAccount"
+      },
+      "description": "Users registry"
+    },
+    "/bookings/{bookingId}": {
+      "schema": {
+        "$ref": "#/entities/Booking"
+      },
+      "description": "Bookings records"
+    }
+  }
+}
