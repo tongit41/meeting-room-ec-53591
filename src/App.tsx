@@ -54,7 +54,8 @@ import {
   Video, 
   Check, 
   AlertCircle,
-  HelpCircle
+  HelpCircle,
+  ShieldCheck
 } from 'lucide-react';
 
 export default function App() {
@@ -178,13 +179,31 @@ export default function App() {
                 await updateDoc(userDocRef, { googleAccessToken: accessToken });
               }
             } else {
-              // Deny access
-              await googleSignOut();
-              setUser(null);
-              setUserProfile(null);
-              setToken(null);
-              setNeedsAuth(true);
-              setLoginError(`ขออภัย อีเมล ${email} ยังไม่ได้ลงทะเบียนในระบบจัดการบัญชีพนักงาน กรุณาติดต่อผู้ดูแลระบบ (Admin) เพื่อเพิ่มบัญชีใช้งานของคุณก่อน`);
+              // Auto-register new Google user into Employee Management (จัดการพนักงาน)
+              const defaultDisplayName = firebaseUser.displayName || email.split('@')[0] || 'พนักงานใหม่';
+              const defaultNickname = firebaseUser.displayName 
+                ? firebaseUser.displayName.split(' ')[0] 
+                : (email.split('@')[0] || 'พนักงาน');
+
+              const newAccount: UserAccount = {
+                id: firebaseUser.uid,
+                email,
+                displayName: defaultDisplayName,
+                nickname: defaultNickname,
+                role: isITSupport ? 'admin' : 'employee',
+                createdAt: new Date().toISOString()
+              };
+
+              await setDoc(userDocRef, newAccount);
+
+              setUser(firebaseUser);
+              setToken(accessToken);
+              setUserProfile(newAccount);
+              setNeedsAuth(false);
+
+              if (newAccount.role === 'admin' && accessToken) {
+                await updateDoc(userDocRef, { googleAccessToken: accessToken });
+              }
             }
           }
         } catch (error) {
@@ -267,8 +286,7 @@ export default function App() {
       });
       setBookings(list);
     }, (error) => {
-      console.error('Error syncing bookings:', error);
-      handleFirestoreError(error, OperationType.LIST, 'bookings');
+      console.warn('Error syncing bookings:', error);
     });
 
     // 3. Real-time Employees/Users Syncing
@@ -284,8 +302,7 @@ export default function App() {
       });
       setUsers(list);
     }, (error) => {
-      console.error('Error syncing users:', error);
-      handleFirestoreError(error, OperationType.LIST, 'users');
+      console.warn('Error syncing users:', error);
     });
 
     return () => {
@@ -316,9 +333,63 @@ export default function App() {
             if (profile.role === 'admin' && result.accessToken) {
               await updateDoc(userDocRef, { googleAccessToken: result.accessToken });
             }
+          } else {
+            // Check if pre-registered by email
+            const email = (result.user.email || '').toLowerCase();
+            const q = query(collection(db, 'users'), where('email', '==', email));
+            const qSnap = await getDocs(q);
+            
+            if (!qSnap.empty) {
+              const oldDocSnap = qSnap.docs[0];
+              const foundProfile = oldDocSnap.data() as UserAccount;
+              const migratedProfile: UserAccount = {
+                ...foundProfile,
+                id: result.user.uid,
+                email
+              };
+              await setDoc(userDocRef, migratedProfile);
+              if (oldDocSnap.id !== result.user.uid) {
+                await deleteDoc(doc(db, 'users', oldDocSnap.id));
+              }
+              setUserProfile(migratedProfile);
+              if (migratedProfile.role === 'admin' && result.accessToken) {
+                await updateDoc(userDocRef, { googleAccessToken: result.accessToken });
+              }
+            } else {
+              // Auto-create new Google user account in Firestore
+              const defaultDisplayName = result.user.displayName || email.split('@')[0] || 'พนักงานใหม่';
+              const defaultNickname = result.user.displayName 
+                ? result.user.displayName.split(' ')[0] 
+                : (email.split('@')[0] || 'พนักงาน');
+
+              const newAccount: UserAccount = {
+                id: result.user.uid,
+                email,
+                displayName: defaultDisplayName,
+                nickname: defaultNickname,
+                role: email === 'itsupport@ec.co.th' ? 'admin' : 'employee',
+                createdAt: new Date().toISOString()
+              };
+
+              await setDoc(userDocRef, newAccount);
+              setUserProfile(newAccount);
+              if (newAccount.role === 'admin' && result.accessToken) {
+                await updateDoc(userDocRef, { googleAccessToken: result.accessToken });
+              }
+            }
           }
         } catch (error) {
-          handleFirestoreError(error, OperationType.GET, `users/${result.user.uid}`);
+          console.warn('Error syncing profile from Firestore, using default profile:', error);
+          const email = (result.user.email || '').toLowerCase();
+          const fallbackProfile: UserAccount = {
+            id: result.user.uid,
+            email,
+            displayName: result.user.displayName || email.split('@')[0] || 'พนักงาน',
+            nickname: result.user.displayName ? result.user.displayName.split(' ')[0] : (email.split('@')[0] || 'พนักงาน'),
+            role: email === 'itsupport@ec.co.th' ? 'admin' : 'employee',
+            createdAt: new Date().toISOString()
+          };
+          setUserProfile(fallbackProfile);
         }
       }
     } catch (err: any) {
@@ -1173,7 +1244,7 @@ export default function App() {
               <button 
                 onClick={handleLogin}
                 disabled={isLoggingIn}
-                className="w-full flex items-center justify-center space-x-3 bg-white hover:bg-slate-100 text-slate-800 font-bold py-3 px-4 rounded-xl shadow-lg border border-slate-200 transition-all cursor-pointer disabled:opacity-50 text-xs animate-pulse"
+                className="w-full flex items-center justify-center space-x-3 bg-white hover:bg-slate-100 text-slate-800 font-bold py-3.5 px-4 rounded-xl shadow-xl border border-slate-200 transition-all cursor-pointer disabled:opacity-50 text-sm hover:scale-[1.01] active:scale-[0.99]"
               >
                 <svg version="1.1" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" className="h-5 w-5 shrink-0">
                   <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"></path>
@@ -1184,44 +1255,16 @@ export default function App() {
                 <span>{isLoggingIn ? 'กำลังเข้าสู่ระบบ...' : 'เข้าสู่ระบบด้วย Google / Gmail'}</span>
               </button>
 
-              <p className="text-[10px] text-slate-500 text-center leading-relaxed">
-                *ระบบจองจะตรวจสอบข้อมูลพนักงานที่ลงทะเบียนไว้กับระบบแล้วเท่านั้น
-              </p>
-
-              <div className="relative flex py-2 items-center">
-                <div className="flex-grow border-t border-slate-800"></div>
-                <span className="flex-shrink mx-4 text-[10px] text-slate-600 font-bold uppercase tracking-wider">หรือ</span>
-                <div className="flex-grow border-t border-slate-800"></div>
+              <div className="bg-indigo-950/40 border border-indigo-500/20 rounded-2xl p-4 text-xs text-indigo-200 space-y-2">
+                <p className="font-bold text-indigo-300 flex items-center space-x-1.5">
+                  <ShieldCheck className="h-4 w-4 text-indigo-400 shrink-0" />
+                  <span>ระบบบังคับใช้ Google / Gmail Authentication</span>
+                </p>
+                <ul className="list-disc pl-4 space-y-1 text-[11px] text-slate-300">
+                  <li>ระบบบังคับล็อกอินผ่านบัญชี Google / Gmail เพื่อความปลอดภัยของข้อมูล</li>
+                  <li>เมื่อล็อกอินสำเร็จ ระบบจะบันทึกโปรไฟล์ของคุณเข้าสู่หน้า <strong className="text-white">"จัดการพนักงาน"</strong> เพื่อให้เป็นสมาชิกของระบบโดยอัตโนมัติ</li>
+                </ul>
               </div>
-
-              {/* Secure Quick Login Verification Form */}
-              <form onSubmit={handleEmployeeQuickLogin} className="space-y-3.5 bg-slate-800/20 p-4 rounded-2xl border border-slate-800/80">
-                <div className="space-y-1.5">
-                  <div className="flex items-center justify-between">
-                    <label className="text-slate-300 font-bold block text-[11px]">ล็อกอินด่วนด้วยอีเมลพนักงาน</label>
-                    <span className="text-[9px] bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 px-1.5 py-0.5 rounded font-medium">Bypass Google Block</span>
-                  </div>
-                  <input
-                    type="email"
-                    required
-                    value={quickLoginEmail}
-                    onChange={(e) => setQuickLoginEmail(e.target.value)}
-                    placeholder="ระบุอีเมลพนักงานของคุณ (เช่น hachi2159@gmail.com)"
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-xs transition-all"
-                  />
-                  <p className="text-[9px] text-slate-500 leading-relaxed">
-                    *สำหรับพนักงานที่ลงทะเบียนในระบบแล้วเท่านั้น ป้อนอีเมลที่ได้รับการอนุมัติเพื่อล็อกอินทดสอบทันทีเพื่อเลี่ยงข้อจำกัดการบล็อกสิทธิ์ทดสอบจาก Google
-                  </p>
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={isQuickLoggingIn}
-                  className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2.5 px-4 rounded-xl shadow-lg border border-indigo-500 transition-all cursor-pointer disabled:opacity-50 text-xs"
-                >
-                  {isQuickLoggingIn ? 'กำลังตรวจสอบสิทธิ์พนักงาน...' : 'ยืนยันอีเมล & เข้าสู่ระบบทันที'}
-                </button>
-              </form>
             </div>
           </div>
 

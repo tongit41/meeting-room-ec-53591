@@ -1,25 +1,16 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Helper function to check if the current user is an admin
-    function isAdmin() {
-      return request.auth != null && 
-        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
-    }
-
     // Rules for the users collection
     match /users/{userId} {
       allow read: if true;
-      allow create, update: if request.auth != null && (request.auth.uid == userId || isAdmin());
-      allow delete: if request.auth != null && isAdmin();
+      allow create, update, delete: if request.auth != null;
     }
 
     // Rules for the bookings collection
     match /bookings/{bookingId} {
       allow read: if true;
-      allow create: if request.auth != null;
-      allow update, delete: if request.auth != null && (resource.data.creatorEmail == request.auth.token.email || isAdmin());
+      allow create, update, delete: if request.auth != null;
     }
   }
 }

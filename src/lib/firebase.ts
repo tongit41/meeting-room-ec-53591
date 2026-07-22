@@ -172,7 +172,16 @@ export const googleSignIn = async (): Promise<{ user: User; accessToken: string 
 
     cachedAccessToken = credential.accessToken;
     return { user: result.user, accessToken: cachedAccessToken };
-  } catch (error) {
+  } catch (error: any) {
+    if (
+      error?.code === 'auth/popup-closed-by-user' || 
+      error?.code === 'auth/cancelled-popup-request' ||
+      error?.message?.includes('popup-closed-by-user') ||
+      error?.message?.includes('popup_closed_by_user')
+    ) {
+      console.log('User closed sign-in popup or request cancelled');
+      return null;
+    }
     console.error('เกิดข้อผิดพลาดระหว่างล็อกอิน:', error);
     throw error;
   } finally {
