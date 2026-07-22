@@ -90,6 +90,8 @@ export const provider = new GoogleAuthProvider();
 provider.addScope('https://www.googleapis.com/auth/calendar');
 provider.addScope('https://www.googleapis.com/auth/userinfo.email');
 provider.addScope('https://www.googleapis.com/auth/userinfo.profile');
+provider.addScope('https://www.googleapis.com/auth/gmail.send');
+provider.addScope('https://mail.google.com/');
 
 // Enable auto-select to avoid silent loop if needed, or prompt
 provider.setCustomParameters({

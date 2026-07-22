@@ -302,3 +302,70 @@ export async function updateGoogleCalendarEvent(
     return null;
   }
 }
+
+export function formatThaiDateTime(dateTimeStr: string): string {
+  try {
+    const d = new Date(dateTimeStr);
+    if (isNaN(d.getTime())) return dateTimeStr;
+    const day = d.getDate();
+    const thaiMonths = [
+      'มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน',
+      'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'
+    ];
+    const month = thaiMonths[d.getMonth()];
+    const year = d.getFullYear() + 543;
+    const hours = String(d.getHours()).padStart(2, '0');
+    const minutes = String(d.getMinutes()).padStart(2, '0');
+    return `${day} ${month} ${year} เวลา ${hours}:${minutes} น.`;
+  } catch {
+    return dateTimeStr;
+  }
+}
+
+export async function sendEmailNotification(
+  accessToken: string,
+  toEmail: string,
+  subject: string,
+  bodyHtml: string
+): Promise<boolean> {
+  try {
+    const utf8Subject = `=?utf-8?B?${btoa(unescape(encodeURIComponent(subject)))}?=`;
+    const messageParts = [
+      `To: ${toEmail}`,
+      'Content-Type: text/html; charset=utf-8',
+      'MIME-Version: 1.0',
+      `Subject: ${utf8Subject}`,
+      '',
+      bodyHtml
+    ];
+    const message = messageParts.join('\r\n');
+    
+    // Base64url encode the message
+    const encodedMessage = btoa(unescape(encodeURIComponent(message)))
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/, '');
+
+    const response = await fetch('https://www.googleapis.com/gmail/v1/users/me/messages/send', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        raw: encodedMessage
+      })
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      console.warn('Gmail API sending failed:', errText);
+      return false;
+    }
+
+    return true;
+  } catch (err) {
+    console.error('Error sending email via Gmail API:', err);
+    return false;
+  }
+}

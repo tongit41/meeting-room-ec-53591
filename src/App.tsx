@@ -34,13 +34,16 @@ import {
 import { 
   createGoogleCalendarEvent, 
   deleteGoogleCalendarEvent, 
-  updateGoogleCalendarEvent 
+  updateGoogleCalendarEvent,
+  sendEmailNotification,
+  formatThaiDateTime
 } from './lib/googleCalendar';
 import Dashboard from './components/Dashboard';
 import CalendarView from './components/CalendarView';
 import BookingModal from './components/BookingModal';
 import UserManagement from './components/UserManagement';
 import ApprovalPanel from './components/ApprovalPanel';
+import ImportCalendarModal from './components/ImportCalendarModal';
 import { 
   Calendar as CalendarIcon, 
   CheckSquare, 
@@ -79,6 +82,7 @@ export default function App() {
   
   // Booking Modal Trigger States
   const [isBookingOpen, setIsBookingOpen] = useState(false);
+  const [isImportOpen, setIsImportOpen] = useState(false);
   const [selectedRoomId, setSelectedRoomId] = useState<RoomId | undefined>(undefined);
   const [initialDate, setInitialDate] = useState<string | undefined>(undefined);
 
@@ -88,9 +92,16 @@ export default function App() {
     bookingId: '',
     title: '',
   });
-  const [deleteAlert, setDeleteAlert] = useState<{ isOpen: boolean; message: string }>({
+  const [deleteAlert, setDeleteAlert] = useState<{ 
+    isOpen: boolean; 
+    message: string; 
+    type?: 'success' | 'warning' | 'error';
+    title?: string;
+  }>({
     isOpen: false,
     message: '',
+    type: 'success',
+    title: 'ดำเนินการสำเร็จ'
   });
   const [logoutConfirmOpen, setLogoutConfirmOpen] = useState(false);
 
@@ -518,13 +529,198 @@ export default function App() {
     // Save to Firestore
     try {
       await setDoc(newBookingDocRef, newBooking);
+      
+      let emailSuccessMsg = '';
+      
+      if (token) {
+        if (newBooking.status === 'pending') {
+          // Send notification email to all admins
+          try {
+            const adminEmails: string[] = ['itsupport@ec.co.th'];
+            const adminsInList = users.filter(u => u.role === 'admin' && u.email);
+            adminsInList.forEach(u => {
+              if (u.email && !adminEmails.includes(u.email.toLowerCase())) {
+                adminEmails.push(u.email.toLowerCase());
+              }
+            });
+
+            const emailSubject = `[คำขอจองห้องใหม่] ${newBooking.title} โดย ${newBooking.creatorName}`;
+            const emailBodyHtml = `
+              <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 8px; background-color: #ffffff;">
+                <div style="text-align: center; padding-bottom: 20px; border-bottom: 2px solid #4f46e5;">
+                  <h2 style="color: #4f46e5; margin: 0;">คำขอจองห้องประชุมใหม่</h2>
+                </div>
+                <div style="padding: 20px 0; color: #334155; line-height: 1.6;">
+                  <p>เรียน คุณผู้ดูแลระบบ,</p>
+                  <p>มีคำขอจองห้องประชุมใหม่รอดำเนินการอนุมัติในระบบ มีรายละเอียดดังนี้:</p>
+                  <table style="width: 100%; border-collapse: collapse; margin: 20px 0; font-size: 14px;">
+                    <tr>
+                      <td style="padding: 8px 0; font-weight: bold; width: 120px; color: #64748b;">หัวข้อกิจกรรม:</td>
+                      <td style="padding: 8px 0;">${newBooking.title}</td>
+                    </tr>
+                    <tr>
+                      <td style="padding: 8px 0; font-weight: bold; color: #64748b;">ผู้ขอจอง:</td>
+                      <td style="padding: 8px 0;">${newBooking.creatorName} (${newBooking.creatorEmail})</td>
+                    </tr>
+                    <tr>
+                      <td style="padding: 8px 0; font-weight: bold; color: #64748b;">ห้องประชุม:</td>
+                      <td style="padding: 8px 0;"><span style="background-color: #e0e7ff; color: #3730a3; padding: 4px 8px; border-radius: 4px; font-weight: bold;">${newBooking.roomName}</span></td>
+                    </tr>
+                    <tr>
+                      <td style="padding: 8px 0; font-weight: bold; color: #64748b;">วันและเวลา:</td>
+                      <td style="padding: 8px 0;">${formatThaiDateTime(newBooking.startTime)} - ${formatThaiDateTime(newBooking.endTime)}</td>
+                    </tr>
+                    <tr>
+                      <td style="padding: 8px 0; font-weight: bold; color: #64748b;">รายละเอียด:</td>
+                      <td style="padding: 8px 0;">${newBooking.description || '-'}</td>
+                    </tr>
+                  </table>
+                  <p style="margin-top: 20px;">ท่านสามารถเข้าสู่ระบบเพื่อทำการตรวจสอบความทับซ้อนและพิจารณาอนุมัติคำขอได้ในหน้า "ตรวจสอบคำขอ" ค่ะ</p>
+                </div>
+                <div style="text-align: center; padding-top: 20px; border-top: 1px solid #e2e8f0; font-size: 12px; color: #94a3b8;">
+                  <p>อีเมลส่งโดยระบบอัตโนมัติจากห้องประชุม EC</p>
+                </div>
+              </div>
+            `;
+
+            let anySent = false;
+            for (const adminEmail of adminEmails) {
+              const sent = await sendEmailNotification(token, adminEmail, emailSubject, emailBodyHtml);
+              if (sent) anySent = true;
+            }
+            if (anySent) {
+              emailSuccessMsg = ' พร้อมส่งอีเมลแจ้งเตือนถึงผู้ดูแลระบบเรียบร้อยแล้วค่ะ';
+            }
+          } catch (mailErr) {
+            console.warn('Could not send booking request email to admins:', mailErr);
+          }
+        } else if (newBooking.status === 'approved') {
+          // Auto-approved by Admin. Send confirmation email to the creator (themselves) and invitees
+          try {
+            const emailSubject = `[ยืนยันการจอง] รายการจองห้องประชุมสำเร็จ: ${newBooking.title}`;
+            
+            let meetSection = '';
+            if (newBooking.meetingType === 'meet' && newBooking.meetingLink) {
+              meetSection = `
+                <div style="margin: 20px 0; padding: 15px; background-color: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; text-align: center;">
+                  <p style="margin: 0 0 10px 0; font-weight: bold; color: #166534; font-size: 15px;">ลิงก์เข้าร่วมประชุม Google Meet</p>
+                  <a href="${newBooking.meetingLink}" style="display: inline-block; background-color: #16a34a; color: #ffffff; padding: 10px 20px; text-decoration: none; border-radius: 6px; font-weight: bold; font-size: 14px;">เข้าร่วมผ่าน Google Meet</a>
+                  <p style="margin: 10px 0 0 0; font-size: 12px; color: #15803d; word-break: break-all;">${newBooking.meetingLink}</p>
+                </div>
+              `;
+            } else if (newBooking.meetingType === 'teams' && newBooking.meetingLink) {
+              meetSection = `
+                <div style="margin: 20px 0; padding: 15px; background-color: #f0f5ff; border: 1px solid #dbeafe; border-radius: 8px; text-align: center;">
+                  <p style="margin: 0 0 10px 0; font-weight: bold; color: #1e40af; font-size: 15px;">ลิงก์เข้าร่วมประชุม Microsoft Teams</p>
+                  <a href="${newBooking.meetingLink}" style="display: inline-block; background-color: #2563eb; color: #ffffff; padding: 10px 20px; text-decoration: none; border-radius: 6px; font-weight: bold; font-size: 14px;">เข้าร่วมผ่าน Teams</a>
+                  <p style="margin: 10px 0 0 0; font-size: 12px; color: #1d4ed8; word-break: break-all;">${newBooking.meetingLink}</p>
+                </div>
+              `;
+            } else if (newBooking.meetingType === 'zoom' && newBooking.meetingLink) {
+              meetSection = `
+                <div style="margin: 20px 0; padding: 15px; background-color: #fdfaf2; border: 1px solid #fef3c7; border-radius: 8px; text-align: center;">
+                  <p style="margin: 0 0 10px 0; font-weight: bold; color: #92400e; font-size: 15px;">ลิงก์เข้าร่วมประชุม Zoom</p>
+                  <a href="${newBooking.meetingLink}" style="display: inline-block; background-color: #d97706; color: #ffffff; padding: 10px 20px; text-decoration: none; border-radius: 6px; font-weight: bold; font-size: 14px;">เข้าร่วมผ่าน Zoom</a>
+                  <p style="margin: 10px 0 0 0; font-size: 12px; color: #b45309; word-break: break-all;">${newBooking.meetingLink}</p>
+                </div>
+              `;
+            }
+
+            const emailBodyHtml = `
+              <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 8px; background-color: #ffffff;">
+                <div style="text-align: center; padding-bottom: 20px; border-bottom: 2px solid #16a34a;">
+                  <h2 style="color: #16a34a; margin: 0;">ยืนยันการจองห้องประชุมสำเร็จ</h2>
+                </div>
+                <div style="padding: 20px 0; color: #334155; line-height: 1.6;">
+                  <p>เรียน คุณ <strong>${newBooking.creatorName}</strong>,</p>
+                  <p>รายการจองห้องประชุมของคุณได้รับการยืนยันและเปิดจองในระบบเรียบร้อย มีรายละเอียดดังต่อไปนี้:</p>
+                  <table style="width: 100%; border-collapse: collapse; margin: 20px 0; font-size: 14px;">
+                    <tr>
+                      <td style="padding: 8px 0; font-weight: bold; width: 120px; color: #64748b;">หัวข้อกิจกรรม:</td>
+                      <td style="padding: 8px 0;">${newBooking.title}</td>
+                    </tr>
+                    <tr>
+                      <td style="padding: 8px 0; font-weight: bold; color: #64748b;">ห้องประชุม:</td>
+                      <td style="padding: 8px 0;"><span style="background-color: #f0fdf4; color: #166534; padding: 4px 8px; border-radius: 4px; font-weight: bold;">${newBooking.roomName}</span></td>
+                    </tr>
+                    <tr>
+                      <td style="padding: 8px 0; font-weight: bold; color: #64748b;">วันและเวลา:</td>
+                      <td style="padding: 8px 0;">${formatThaiDateTime(newBooking.startTime)} - ${formatThaiDateTime(newBooking.endTime)}</td>
+                    </tr>
+                    <tr>
+                      <td style="padding: 8px 0; font-weight: bold; color: #64748b;">รายละเอียด:</td>
+                      <td style="padding: 8px 0;">${newBooking.description || '-'}</td>
+                    </tr>
+                  </table>
+                  
+                  ${meetSection}
+                  
+                </div>
+                <div style="text-align: center; padding-top: 20px; border-top: 1px solid #e2e8f0; font-size: 12px; color: #94a3b8;">
+                  <p>อีเมลส่งโดยระบบอัตโนมัติจากห้องประชุม EC</p>
+                </div>
+              </div>
+            `;
+
+            const sent = await sendEmailNotification(token, newBooking.creatorEmail, emailSubject, emailBodyHtml);
+            if (sent) {
+              emailSuccessMsg = ' พร้อมส่งอีเมลยืนยันรายการจองถึงกล่องข้อความเรียบร้อยแล้วค่ะ';
+            }
+          } catch (mailErr) {
+            console.warn('Could not send auto-approved confirmation email:', mailErr);
+          }
+        }
+      }
+
       setDeleteAlert({
         isOpen: true,
-        message: 'ทำการจองเรียบร้อย',
+        message: `ทำการจองห้องประชุมเรียบร้อยแล้วค่ะ${emailSuccessMsg}`,
+        type: 'success',
+        title: 'ทำการจองสำเร็จ'
       });
       setActiveTab('dashboard');
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, `bookings/${newBookingDocRef.id}`);
+    }
+  };
+
+  // IMPORT EVENTS FROM ICS FILE
+  const handleImportEvents = async (eventsToImport: Omit<Booking, 'id' | 'createdAt'>[]) => {
+    let successCount = 0;
+    try {
+      for (const rawEvt of eventsToImport) {
+        const newBookingDocRef = doc(collection(db, 'bookings'));
+        const newBooking: Omit<Booking, 'id'> = {
+          ...rawEvt,
+          createdAt: new Date().toISOString()
+        };
+
+        // Sync with Google Calendar if OAuth token is active & status is approved
+        if (newBooking.status === 'approved' && token) {
+          try {
+            const calendarResult = await createGoogleCalendarEvent(token, newBooking as any, newBookingDocRef.id);
+            newBooking.googleEventId = calendarResult.eventId;
+            if (newBooking.meetingType === 'meet' && calendarResult.meetingLink) {
+              newBooking.meetingLink = calendarResult.meetingLink;
+            }
+          } catch (calErr) {
+            console.warn('Sync to Google Calendar failed during import:', calErr);
+          }
+        }
+
+        await setDoc(newBookingDocRef, newBooking);
+        successCount++;
+      }
+
+      setDeleteAlert({
+        isOpen: true,
+        message: `นำเข้าตารางกิจกรรมสำเร็จทั้งหมด ${successCount} รายการเรียบร้อยแล้วค่ะ`,
+        type: 'success',
+        title: 'นำเข้าสำเร็จ'
+      });
+    } catch (err: any) {
+      console.error('Import error:', err);
+      throw new Error(`นำเข้าสำเร็จบางส่วน (${successCount} รายการ) แต่เกิดข้อผิดพลาด: ${err?.message || String(err)}`);
     }
   };
 
@@ -550,17 +746,18 @@ export default function App() {
     let updatedGoogleEventId = bData.googleEventId || '';
     let updatedMeetingLink = bData.meetingLink || '';
 
+    const activeToken = token || (await getAdminGoogleToken());
+
     // Create Calendar Event & Meet links if not already synced
-    if (token && !bData.googleEventId) {
+    if (activeToken && !bData.googleEventId) {
       try {
-        const calResult = await createGoogleCalendarEvent(token, bData, bookingId);
+        const calResult = await createGoogleCalendarEvent(activeToken, bData, bookingId);
         updatedGoogleEventId = calResult.eventId;
         if (bData.meetingType === 'meet' && calResult.meetingLink) {
           updatedMeetingLink = calResult.meetingLink;
         }
       } catch (calErr) {
         console.error('Failed to sync to Google Calendar on approval:', calErr);
-        alert('อนุมัติสำเร็จในระบบ แต่ไม่สามารถซิงค์ขึ้น Google Calendar ของผู้จองได้ (สิทธิ์ Token อาจหมดอายุ)');
       }
     }
 
@@ -572,6 +769,89 @@ export default function App() {
         meetingLink: updatedMeetingLink,
         approvedBy: userProfile.displayName
       });
+
+      let emailSent = false;
+      let emailErrorMsg = '';
+
+      // Try sending a custom email notification to the creator
+      if (activeToken && bData.creatorEmail) {
+        try {
+          const emailSubject = `[อนุมัติแล้ว] รายการจองห้องประชุมของคุณ: ${bData.title}`;
+          
+          let meetingLinkHtml = '';
+          if (updatedMeetingLink) {
+            meetingLinkHtml = `
+              <tr>
+                <td style="padding: 8px 0; font-weight: bold; color: #64748b;">ลิงก์การประชุม:</td>
+                <td style="padding: 8px 0;"><a href="${updatedMeetingLink}" style="color: #4f46e5; text-decoration: underline; font-weight: bold;">เข้าร่วมสายประชุมออนไลน์</a></td>
+              </tr>
+            `;
+          }
+
+          const emailBodyHtml = `
+            <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 8px; background-color: #ffffff;">
+              <div style="text-align: center; padding-bottom: 20px; border-bottom: 2px solid #10b981;">
+                <h2 style="color: #10b981; margin: 0;">อนุมัติการจองห้องประชุมเรียบร้อยแล้ว</h2>
+              </div>
+              <div style="padding: 20px 0; color: #334155; line-height: 1.6;">
+                <p>เรียน คุณ <strong>${bData.creatorName || bData.creatorEmail}</strong>,</p>
+                <p>รายการจองห้องประชุมของคุณได้รับการอนุมัติเรียบร้อยแล้ว โดยมีรายละเอียดดังนี้:</p>
+                <table style="width: 100%; border-collapse: collapse; margin: 20px 0; font-size: 14px;">
+                  <tr>
+                    <td style="padding: 8px 0; font-weight: bold; width: 120px; color: #64748b;">หัวข้อกิจกรรม:</td>
+                    <td style="padding: 8px 0;">${bData.title}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding: 8px 0; font-weight: bold; color: #64748b;">ห้องประชุม:</td>
+                    <td style="padding: 8px 0;"><span style="background-color: #ecfdf5; color: #065f46; padding: 4px 8px; border-radius: 4px; font-weight: bold;">${bData.roomName}</span></td>
+                  </tr>
+                  <tr>
+                    <td style="padding: 8px 0; font-weight: bold; color: #64748b;">เวลาเริ่มต้น:</td>
+                    <td style="padding: 8px 0;">${formatThaiDateTime(bData.startTime)}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding: 8px 0; font-weight: bold; color: #64748b;">เวลาสิ้นสุด:</td>
+                    <td style="padding: 8px 0;">${formatThaiDateTime(bData.endTime)}</td>
+                  </tr>
+                  ${meetingLinkHtml}
+                </table>
+                <p style="margin-top: 20px;">ระบบได้เพิ่มกิจกรรมนี้เข้าไปใน Google Calendar ของท่านเรียบร้อยแล้ว</p>
+              </div>
+              <div style="text-align: center; padding-top: 20px; border-top: 1px solid #e2e8f0; font-size: 12px; color: #94a3b8;">
+                <p>อีเมลฉบับนี้ส่งโดยระบบอัตโนมัติจากห้องประชุม EC</p>
+              </div>
+            </div>
+          `;
+          
+          const sent = await sendEmailNotification(activeToken, bData.creatorEmail, emailSubject, emailBodyHtml);
+          if (sent) {
+            emailSent = true;
+          } else {
+            emailErrorMsg = 'สิทธิ์ของโทเค็นแอดมิน (Gmail Send API) ไม่ได้รับการอนุญาตหรือหมดอายุ';
+          }
+        } catch (mailErr) {
+          console.warn('Could not send approval email:', mailErr);
+          emailErrorMsg = String(mailErr);
+        }
+      } else if (!activeToken) {
+        emailErrorMsg = 'ระบบตรวจไม่พบ Google Access Token ของแอดมินในฐานข้อมูล (อาจล็อกอินผ่าน Quick Login)';
+      }
+
+      if (emailSent) {
+        setDeleteAlert({
+          isOpen: true,
+          message: 'อนุมัติรายการจองห้องประชุมสำเร็จ พร้อมส่งอีเมลแจ้งเตือนถึงผู้จัดประชุมเรียบร้อยแล้วค่ะ',
+          type: 'success',
+          title: 'อนุมัติการจองสำเร็จ'
+        });
+      } else {
+        setDeleteAlert({
+          isOpen: true,
+          message: `อนุมัติรายการจองห้องประชุมสำเร็จ แต่อีเมลไม่ถูกส่ง:\n⚠️ ${emailErrorMsg || 'ไม่พบสิทธิ์เมล'}\n\n💡 คำแนะนำ: รบกวนคุณแอดมินลงชื่อออกจากระบบ (Sign Out) แล้วทำการเข้าสู่ระบบด้วยบัญชี Google (itsupport@ec.co.th) ใหม่อีกครั้ง เพื่ออัปเดตสิทธิ์ Gmail API และเปิดสิทธิ์การส่งอีเมลแบบสมบูรณ์ค่ะ`,
+          type: 'warning',
+          title: 'อนุมัติสำเร็จ แต่ส่งอีเมลไม่สำเร็จ'
+        });
+      }
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `bookings/${bookingId}`);
     }
@@ -613,13 +893,12 @@ export default function App() {
 
     const bData = bookingSnap.data() as Booking;
 
+    const activeToken = token || (await getAdminGoogleToken());
+
     // Delete Google Calendar Event if it was somehow synced previously
-    if (bData.googleEventId) {
+    if (bData.googleEventId && activeToken) {
       try {
-        const activeToken = token || (await getAdminGoogleToken());
-        if (activeToken) {
-          await deleteGoogleCalendarEvent(activeToken, bData.googleEventId);
-        }
+        await deleteGoogleCalendarEvent(activeToken, bData.googleEventId);
       } catch (calErr) {
         console.error('Failed to delete Google Calendar event on rejection:', calErr);
       }
@@ -633,6 +912,78 @@ export default function App() {
         googleEventId: '',
         approvedBy: ''
       });
+
+      let emailSent = false;
+      let emailErrorMsg = '';
+
+      // Try sending a custom rejection email notification to the creator
+      if (activeToken && bData.creatorEmail) {
+        try {
+          const emailSubject = `[ปฏิเสธการจอง] รายการจองห้องประชุมของคุณ: ${bData.title}`;
+          
+          const emailBodyHtml = `
+            <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 8px; background-color: #ffffff;">
+              <div style="text-align: center; padding-bottom: 20px; border-bottom: 2px solid #ef4444;">
+                <h2 style="color: #ef4444; margin: 0;">ปฏิเสธการจองห้องประชุม</h2>
+              </div>
+              <div style="padding: 20px 0; color: #334155; line-height: 1.6;">
+                <p>เรียน คุณ <strong>${bData.creatorName || bData.creatorEmail}</strong>,</p>
+                <p>ขออภัยด้วยค่ะ รายการจองห้องประชุมของคุณได้รับการปฏิเสธ โดยมีรายละเอียดดังนี้:</p>
+                <table style="width: 100%; border-collapse: collapse; margin: 20px 0; font-size: 14px;">
+                  <tr>
+                    <td style="padding: 8px 0; font-weight: bold; width: 120px; color: #64748b;">หัวข้อกิจกรรม:</td>
+                    <td style="padding: 8px 0;">${bData.title}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding: 8px 0; font-weight: bold; color: #64748b;">ห้องประชุม:</td>
+                    <td style="padding: 8px 0;"><span style="background-color: #fef2f2; color: #991b1b; padding: 4px 8px; border-radius: 4px; font-weight: bold;">${bData.roomName}</span></td>
+                  </tr>
+                  <tr>
+                    <td style="padding: 8px 0; font-weight: bold; color: #64748b;">วันและเวลา:</td>
+                    <td style="padding: 8px 0;">${formatThaiDateTime(bData.startTime)} - ${formatThaiDateTime(bData.endTime)}</td>
+                  </tr>
+                  <tr style="background-color: #fff1f2;">
+                    <td style="padding: 12px; font-weight: bold; color: #991b1b; vertical-align: top;">เหตุผลที่ปฏิเสธ:</td>
+                    <td style="padding: 12px; color: #991b1b; font-weight: bold;">${reason}</td>
+                  </tr>
+                </table>
+                <p style="margin-top: 20px;">หากท่านต้องการจองห้องประชุมใหม่หรือมีข้อสงสัย กรุณาติดต่อผู้ดูแลระบบ</p>
+              </div>
+              <div style="text-align: center; padding-top: 20px; border-top: 1px solid #e2e8f0; font-size: 12px; color: #94a3b8;">
+                <p>อีเมลฉบับนี้ส่งโดยระบบอัตโนมัติจากห้องประชุม EC</p>
+              </div>
+            </div>
+          `;
+          
+          const sent = await sendEmailNotification(activeToken, bData.creatorEmail, emailSubject, emailBodyHtml);
+          if (sent) {
+            emailSent = true;
+          } else {
+            emailErrorMsg = 'สิทธิ์ของโทเค็นแอดมิน (Gmail Send API) ไม่ได้รับการอนุญาตหรือหมดอายุ';
+          }
+        } catch (mailErr) {
+          console.warn('Could not send rejection email:', mailErr);
+          emailErrorMsg = String(mailErr);
+        }
+      } else if (!activeToken) {
+        emailErrorMsg = 'ระบบตรวจไม่พบ Google Access Token ของแอดมินในฐานข้อมูล (อาจล็อกอินผ่าน Quick Login)';
+      }
+
+      if (emailSent) {
+        setDeleteAlert({
+          isOpen: true,
+          message: 'ปฏิเสธรายการจองห้องประชุมเรียบร้อย พร้อมส่งอีเมลชี้แจงผู้จองเรียบร้อยแล้วค่ะ',
+          type: 'success',
+          title: 'ปฏิเสธการจองสำเร็จ'
+        });
+      } else {
+        setDeleteAlert({
+          isOpen: true,
+          message: `ปฏิเสธรายการจองห้องประชุมสำเร็จ แต่อีเมลไม่ถูกส่ง:\n⚠️ ${emailErrorMsg || 'ไม่พบสิทธิ์เมล'}\n\n💡 คำแนะนำ: รบกวนคุณแอดมินลงชื่อออกจากระบบ (Sign Out) แล้วทำการเข้าสู่ระบบด้วยบัญชี Google (itsupport@ec.co.th) ใหม่อีกครั้ง เพื่ออัปเดตสิทธิ์ Gmail API และเปิดสิทธิ์การส่งอีเมลแบบสมบูรณ์ค่ะ`,
+          type: 'warning',
+          title: 'ปฏิเสธสำเร็จ แต่ส่งอีเมลไม่สำเร็จ'
+        });
+      }
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `bookings/${bookingId}`);
     }
@@ -706,9 +1057,55 @@ export default function App() {
     // Delete from DB
     try {
       await deleteDoc(bookingRef);
+      
+      let emailSuccessMsg = '';
+      const activeToken = token || (await getAdminGoogleToken());
+      if (activeToken && bData.creatorEmail) {
+        try {
+          const emailSubject = `[ยกเลิกการจอง] รายการจองห้องประชุมของคุณถูกยกเลิก: ${bData.title}`;
+          const emailBodyHtml = `
+            <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 8px; background-color: #ffffff;">
+              <div style="text-align: center; padding-bottom: 20px; border-bottom: 2px solid #ef4444;">
+                <h2 style="color: #ef4444; margin: 0;">ยกเลิกรายการจองห้องประชุม</h2>
+              </div>
+              <div style="padding: 20px 0; color: #334155; line-height: 1.6;">
+                <p>เรียน คุณ <strong>${bData.creatorName || bData.creatorEmail}</strong>,</p>
+                <p>รายการจองห้องประชุมของคุณได้รับการยกเลิก/ลบออกจากระบบเรียบร้อยแล้ว มีรายละเอียดดังนี้:</p>
+                <table style="width: 100%; border-collapse: collapse; margin: 20px 0; font-size: 14px;">
+                  <tr>
+                    <td style="padding: 8px 0; font-weight: bold; width: 120px; color: #64748b;">หัวข้อกิจกรรม:</td>
+                    <td style="padding: 8px 0;">${bData.title}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding: 8px 0; font-weight: bold; color: #64748b;">ห้องประชุม:</td>
+                    <td style="padding: 8px 0;"><span style="background-color: #f1f5f9; color: #475569; padding: 4px 8px; border-radius: 4px; font-weight: bold;">${bData.roomName}</span></td>
+                  </tr>
+                  <tr>
+                    <td style="padding: 8px 0; font-weight: bold; color: #64748b;">วันและเวลาเดิม:</td>
+                    <td style="padding: 8px 0;">${formatThaiDateTime(bData.startTime)} - ${formatThaiDateTime(bData.endTime)}</td>
+                  </tr>
+                </table>
+                <p style="margin-top: 20px;">หากท่านต้องการทำรายการจองห้องประชุมใหม่อีกครั้ง สามารถจองได้ผ่านหน้าแดชบอร์ดระบบหรือติดต่อผู้ดูแลระบบได้เลยค่ะ</p>
+              </div>
+              <div style="text-align: center; padding-top: 20px; border-top: 1px solid #e2e8f0; font-size: 12px; color: #94a3b8;">
+                <p>อีเมลส่งโดยระบบอัตโนมัติจากห้องประชุม EC</p>
+              </div>
+            </div>
+          `;
+          const sent = await sendEmailNotification(activeToken, bData.creatorEmail, emailSubject, emailBodyHtml);
+          if (sent) {
+            emailSuccessMsg = ' พร้อมส่งอีเมลแจ้งยกเลิกรายการเรียบร้อยแล้วค่ะ';
+          }
+        } catch (mailErr) {
+          console.warn('Could not send cancellation email:', mailErr);
+        }
+      }
+
       setDeleteAlert({
         isOpen: true,
-        message: 'ลบกิจกรรมสำเร็จ',
+        message: `ลบกิจกรรมการจองห้องประชุมเรียบร้อยแล้วค่ะ${emailSuccessMsg}`,
+        type: 'success',
+        title: 'ลบกิจกรรมสำเร็จ'
       });
       setActiveTab('dashboard');
     } catch (error) {
@@ -982,6 +1379,7 @@ export default function App() {
               currentUserEmail={user.email}
               onSelectTab={setActiveTab}
               onDeleteBooking={handleDeleteBooking}
+              onOpenImportModal={() => setIsImportOpen(true)}
             />
           )}
 
@@ -1035,6 +1433,15 @@ export default function App() {
         bookings={bookings}
       />
 
+      {/* Import Calendar Modal */}
+      <ImportCalendarModal 
+        isOpen={isImportOpen}
+        onClose={() => setIsImportOpen(false)}
+        bookings={bookings}
+        userProfile={userProfile}
+        onImportConfirm={handleImportEvents}
+      />
+
       {/* Custom Delete Confirmation Modal */}
       {deleteConfirm.isOpen && (
         <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
@@ -1079,17 +1486,33 @@ export default function App() {
         <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-2xl max-w-sm w-full space-y-4 text-center animate-in fade-in duration-200">
             <div className="flex flex-col items-center space-y-3">
-              <div className="p-3 bg-emerald-50 text-emerald-600 rounded-full">
-                <Check className="h-8 w-8" />
-              </div>
-              <h3 className="text-lg font-bold text-slate-800">ดำเนินการสำเร็จ</h3>
+              {deleteAlert.type === 'warning' ? (
+                <div className="p-3 bg-amber-50 text-amber-600 rounded-full">
+                  <ShieldAlert className="h-8 w-8" />
+                </div>
+              ) : deleteAlert.type === 'error' ? (
+                <div className="p-3 bg-rose-50 text-rose-600 rounded-full">
+                  <ShieldAlert className="h-8 w-8" />
+                </div>
+              ) : (
+                <div className="p-3 bg-emerald-50 text-emerald-600 rounded-full">
+                  <Check className="h-8 w-8" />
+                </div>
+              )}
+              <h3 className="text-lg font-bold text-slate-800">{deleteAlert.title || 'ดำเนินการสำเร็จ'}</h3>
             </div>
             
-            <p className="text-sm text-slate-600">{deleteAlert.message}</p>
+            <p className="text-sm text-slate-600 whitespace-pre-line">{deleteAlert.message}</p>
 
             <button
               onClick={() => setDeleteAlert({ isOpen: false, message: '' })}
-              className="w-full py-2.5 bg-indigo-600 text-white font-bold rounded-lg text-xs hover:bg-indigo-700 transition-all cursor-pointer shadow-lg shadow-indigo-200"
+              className={`w-full py-2.5 text-white font-bold rounded-lg text-xs transition-all cursor-pointer shadow-lg ${
+                deleteAlert.type === 'warning' 
+                ? 'bg-amber-600 hover:bg-amber-700 shadow-amber-200' 
+                : deleteAlert.type === 'error'
+                ? 'bg-rose-600 hover:bg-rose-700 shadow-rose-200'
+                : 'bg-indigo-600 hover:bg-indigo-700 shadow-indigo-200'
+              }`}
             >
               ตกลง
             </button>

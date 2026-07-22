@@ -6,5 +6,6 @@
   "storageBucket": "meeting-room-ec-53591.firebasestorage.app",
   "messagingSenderId": "397344681070",
   "measurementId": "",
-  "firestoreDatabaseId": "ai-studio-meetingroomec-3c2bddea-cdac-4fd8-a67f-a08c0376010b"
+  "oAuthClientId": "397344681070-ae2d3qvthscgjeja1erlqi7mrp16nhag.apps.googleusercontent.com",
+  "recaptchaSiteKey": ""
 }

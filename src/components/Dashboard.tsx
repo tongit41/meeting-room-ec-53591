@@ -13,7 +13,8 @@ import {
   Sparkles,
   MessageCircle,
   Video,
-  Trash2
+  Trash2,
+  FileUp
 } from 'lucide-react';
 import { Booking, MeetingRoom, RoomId } from '../types';
 import { MEETING_ROOMS } from '../lib/firebase';
@@ -26,6 +27,7 @@ interface DashboardProps {
   currentUserEmail: string | null;
   onSelectTab: (tab: string) => void;
   onDeleteBooking?: (bookingId: string) => void;
+  onOpenImportModal?: () => void;
 }
 
 export default function Dashboard({
@@ -35,7 +37,8 @@ export default function Dashboard({
   isAdmin,
   currentUserEmail,
   onSelectTab,
-  onDeleteBooking
+  onDeleteBooking,
+  onOpenImportModal
 }: DashboardProps) {
   const [now, setNow] = useState(new Date());
 
@@ -209,13 +212,25 @@ export default function Dashboard({
             <h2 className="text-xl font-bold text-slate-800">สถานะห้องประชุมแบบเรียลไทม์</h2>
             <p className="text-xs text-slate-500">แสดงผลสถานะห้องและรายการประชุมที่จะเกิดขึ้นในวันนี้</p>
           </div>
-          <button 
-            onClick={() => onOpenBookingModal()}
-            className="flex items-center space-x-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold px-4 py-2.5 rounded-lg shadow-sm transition-all"
-          >
-            <Plus className="h-4 w-4" />
-            <span>จองห้องประชุม</span>
-          </button>
+          <div className="flex items-center space-x-2">
+            {onOpenImportModal && (
+              <button 
+                onClick={onOpenImportModal}
+                className="flex items-center space-x-2 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 text-xs font-semibold px-3 py-2.5 sm:px-4 sm:py-2.5 rounded-lg shadow-sm transition-all cursor-pointer"
+                title="นำเข้าไฟล์ปฏิทิน .ics จาก Google Calendar"
+              >
+                <FileUp className="h-4 w-4 text-indigo-600 shrink-0" />
+                <span>นำเข้าปฏิทิน (.ics)</span>
+              </button>
+            )}
+            <button 
+              onClick={() => onOpenBookingModal()}
+              className="flex items-center space-x-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold px-4 py-2.5 rounded-lg shadow-sm transition-all cursor-pointer"
+            >
+              <Plus className="h-4 w-4 shrink-0" />
+              <span>จองห้องประชุม</span>
+            </button>
+          </div>
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
