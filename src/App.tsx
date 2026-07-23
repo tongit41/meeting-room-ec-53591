@@ -86,6 +86,7 @@ export default function App() {
   const [isImportOpen, setIsImportOpen] = useState(false);
   const [selectedRoomId, setSelectedRoomId] = useState<RoomId | undefined>(undefined);
   const [initialDate, setInitialDate] = useState<string | undefined>(undefined);
+  const [editingBooking, setEditingBooking] = useState<Booking | null>(null);
 
   // Custom Delete Confirmation & Alert Dialog States
   const [deleteConfirm, setDeleteConfirm] = useState<{ isOpen: boolean; bookingId: string; title: string }>({
@@ -964,12 +965,14 @@ export default function App() {
 
     const bData = bookingSnap.data() as Booking;
 
-    const activeToken = token || (await getAdminGoogleToken());
+    const adminToken = await getAdminGoogleToken();
+    const primaryToken = adminToken || token;
+    const fallbackToken = token && token !== primaryToken ? token : null;
 
     // Delete Google Calendar Event if it was somehow synced previously
-    if (bData.googleEventId && activeToken) {
+    if (bData.googleEventId && primaryToken) {
       try {
-        await deleteGoogleCalendarEvent(activeToken, bData.googleEventId);
+        await deleteGoogleCalendarEvent(primaryToken, bData.googleEventId, fallbackToken);
       } catch (calErr) {
         console.error('Failed to delete Google Calendar event on rejection:', calErr);
       }
@@ -988,7 +991,7 @@ export default function App() {
       let emailErrorMsg = '';
 
       // Try sending a custom rejection email notification to the creator
-      if (activeToken && bData.creatorEmail) {
+      if (primaryToken && bData.creatorEmail) {
         try {
           const emailSubject = `[ปฏิเสธการจอง] รายการจองห้องประชุมของคุณ: ${bData.title}`;
           
@@ -1026,7 +1029,7 @@ export default function App() {
             </div>
           `;
           
-          const sent = await sendEmailNotification(activeToken, bData.creatorEmail, emailSubject, emailBodyHtml);
+          const sent = await sendEmailNotification(primaryToken, bData.creatorEmail, emailSubject, emailBodyHtml);
           if (sent) {
             emailSent = true;
           } else {
@@ -1036,7 +1039,7 @@ export default function App() {
           console.warn('Could not send rejection email:', mailErr);
           emailErrorMsg = String(mailErr);
         }
-      } else if (!activeToken) {
+      } else if (!primaryToken) {
         emailErrorMsg = 'ระบบตรวจไม่พบ Google Access Token ของแอดมินในฐานข้อมูล (อาจล็อกอินผ่าน Quick Login)';
       }
 
@@ -1114,9 +1117,11 @@ export default function App() {
     // Delete Google Calendar Event if it exists
     if (bData.googleEventId) {
       try {
-        const activeToken = token || (await getAdminGoogleToken());
-        if (activeToken) {
-          await deleteGoogleCalendarEvent(activeToken, bData.googleEventId);
+        const adminToken = await getAdminGoogleToken();
+        const primaryToken = adminToken || token;
+        const fallbackToken = token && token !== primaryToken ? token : null;
+        if (primaryToken) {
+          await deleteGoogleCalendarEvent(primaryToken, bData.googleEventId, fallbackToken);
         } else {
           console.warn('No active token available to delete Google Calendar event');
         }
@@ -1184,9 +1189,128 @@ export default function App() {
     }
   };
 
-  const handleOpenBooking = (roomId?: RoomId, date?: string) => {
+  // UPDATE BOOKING
+  const handleUpdateBooking = async (
+    bookingId: string, 
+    bookingData: Omit<Booking, 'id' | 'createdAt' | 'creatorEmail' | 'creatorName'>
+  ) => {
+    if (!user || !userProfile) throw new Error('กรุณาล็อกอินก่อนทำรายการ');
+
+    const bookingRef = doc(db, 'bookings', bookingId);
+    let bookingSnap;
+    try {
+      bookingSnap = await getDoc(bookingRef);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.GET, `bookings/${bookingId}`);
+      return;
+    }
+
+    if (!bookingSnap.exists()) {
+      throw new Error('ไม่พบข้อมูลกิจกรรมการจองที่ต้องการแก้ไข');
+    }
+
+    const existingBooking = bookingSnap.data() as Booking;
+
+    // Check permission: Admin or creator
+    const isUserAdmin = userProfile.role === 'admin' || user.email === 'itsupport@ec.co.th';
+    const isCreator = (user.email && user.email === existingBooking.creatorEmail) || (userProfile.email && userProfile.email === existingBooking.creatorEmail);
+
+    if (!isUserAdmin && !isCreator) {
+      throw new Error('คุณไม่มีสิทธิ์ในการแก้ไขกิจกรรมการจองนี้ (เฉพาะผู้จองหรือผู้ดูแลระบบเท่านั้น)');
+    }
+
+    // Safety overlap check ignoring current booking being edited
+    const overlap = bookings.find(b => {
+      if (b.id === bookingId) return false;
+      if (b.roomId !== bookingData.roomId) return false;
+      if (b.status === 'rejected') return false;
+      return b.startTime < bookingData.endTime && bookingData.startTime < b.endTime;
+    });
+
+    if (overlap) {
+      throw new Error(
+        `ห้องประชุมนี้ถูกจองไว้แล้วในช่วงเวลาดังกล่าว\n\nหัวข้อ: ${overlap.title}\nเวลา: ${overlap.startTime.split('T')[1]} - ${overlap.endTime.split('T')[1]} น.`
+      );
+    }
+
+    const updatedBookingObj: Booking = {
+      ...existingBooking,
+      ...bookingData,
+      id: bookingId,
+      creatorEmail: existingBooking.creatorEmail,
+      creatorName: existingBooking.creatorName,
+    };
+
+    let updatedMeetingLink = updatedBookingObj.meetingLink;
+
+    // If Google Calendar event exists, sync updates to Google Calendar
+    if (existingBooking.googleEventId) {
+      const adminToken = await getAdminGoogleToken();
+      const primaryToken = adminToken || token;
+      const fallbackToken = token && token !== primaryToken ? token : null;
+
+      if (primaryToken) {
+        try {
+          let newLink = await updateGoogleCalendarEvent(
+            primaryToken,
+            existingBooking.googleEventId,
+            updatedBookingObj
+          );
+          if (!newLink && fallbackToken) {
+            newLink = await updateGoogleCalendarEvent(
+              fallbackToken,
+              existingBooking.googleEventId,
+              updatedBookingObj
+            );
+          }
+          if (newLink) {
+            updatedMeetingLink = newLink;
+          }
+        } catch (calErr) {
+          console.warn('Failed to sync booking update to Google Calendar:', calErr);
+        }
+      }
+    }
+
+    try {
+      await updateDoc(bookingRef, {
+        title: bookingData.title,
+        description: bookingData.description,
+        roomId: bookingData.roomId,
+        roomName: bookingData.roomName,
+        startTime: bookingData.startTime,
+        endTime: bookingData.endTime,
+        meetingType: bookingData.meetingType,
+        meetingLink: updatedMeetingLink || '',
+        attendees: bookingData.attendees,
+      });
+
+      setDeleteAlert({
+        isOpen: true,
+        message: 'แก้ไขกิจกรรมการจองห้องประชุมและเลื่อนเวลาเรียบร้อยแล้วค่ะ',
+        type: 'success',
+        title: 'แก้ไขกิจกรรมสำเร็จ'
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `bookings/${bookingId}`);
+    }
+  };
+
+  const handleSaveBooking = async (
+    bookingData: Omit<Booking, 'id' | 'createdAt' | 'creatorEmail' | 'creatorName'>,
+    editingBookingId?: string
+  ) => {
+    if (editingBookingId) {
+      await handleUpdateBooking(editingBookingId, bookingData);
+    } else {
+      await handleCreateBooking(bookingData);
+    }
+  };
+
+  const handleOpenBooking = (roomId?: RoomId, date?: string, bookingToEdit?: Booking) => {
     setSelectedRoomId(roomId);
     setInitialDate(date);
+    setEditingBooking(bookingToEdit || null);
     setIsBookingOpen(true);
   };
 
@@ -1422,6 +1546,7 @@ export default function App() {
               currentUserEmail={user.email}
               onSelectTab={setActiveTab}
               onDeleteBooking={handleDeleteBooking}
+              onEditBooking={(b) => handleOpenBooking(b.roomId, undefined, b)}
               onOpenImportModal={() => setIsImportOpen(true)}
             />
           )}
@@ -1434,6 +1559,7 @@ export default function App() {
               currentUserEmail={user.email}
               isAdmin={isAdmin}
               onDeleteBooking={handleDeleteBooking}
+              onEditBooking={(b) => handleOpenBooking(b.roomId, undefined, b)}
             />
           )}
 
@@ -1465,15 +1591,19 @@ export default function App() {
       {/* Booking Form Dialog */}
       <BookingModal 
         isOpen={isBookingOpen}
-        onClose={() => setIsBookingOpen(false)}
+        onClose={() => {
+          setIsBookingOpen(false);
+          setEditingBooking(null);
+        }}
         roomId={selectedRoomId}
         initialDate={initialDate}
         rooms={MEETING_ROOMS}
-        onSubmit={handleCreateBooking}
+        onSubmit={handleSaveBooking}
         currentUserEmail={user.email}
         currentUserName={user.displayName}
         isAdmin={isAdmin}
         bookings={bookings}
+        editingBooking={editingBooking}
       />
 
       {/* Import Calendar Modal */}

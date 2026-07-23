@@ -24,11 +24,12 @@ interface BookingModalProps {
   roomId?: RoomId;
   initialDate?: string; // YYYY-MM-DD
   rooms?: MeetingRoom[];
-  onSubmit: (bookingData: Omit<Booking, 'id' | 'createdAt' | 'creatorEmail' | 'creatorName'>) => Promise<void>;
+  onSubmit: (bookingData: Omit<Booking, 'id' | 'createdAt' | 'creatorEmail' | 'creatorName'>, editingBookingId?: string) => Promise<void>;
   currentUserEmail: string | null;
   currentUserName: string | null;
   isAdmin: boolean;
   bookings?: Booking[];
+  editingBooking?: Booking | null;
 }
 
 export default function BookingModal({
@@ -41,7 +42,8 @@ export default function BookingModal({
   currentUserEmail,
   currentUserName,
   isAdmin,
-  bookings = []
+  bookings = [],
+  editingBooking = null
 }: BookingModalProps) {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
@@ -61,27 +63,43 @@ export default function BookingModal({
   // Hydrate fields on open/props change
   useEffect(() => {
     if (isOpen) {
-      setTitle('');
-      setDescription('');
-      setSelectedRoomId(initialRoomId || 'room1');
-      
-      const now = new Date();
-      const localYear = now.getFullYear();
-      const localMonth = String(now.getMonth() + 1).padStart(2, '0');
-      const localDay = String(now.getDate()).padStart(2, '0');
-      const todayStr = `${localYear}-${localMonth}-${localDay}`;
-      setDate(initialDate || todayStr);
-      setStartTime('09:00');
-      setEndTime('10:00');
-      setMeetingPlatform('meet');
-      setCustomLink('');
-      setSelectedAttendees([]);
-      setErrorMsg('');
+      if (editingBooking) {
+        setTitle(editingBooking.title || '');
+        setDescription(editingBooking.description || '');
+        setSelectedRoomId(editingBooking.roomId || 'room1');
+        
+        const startParts = editingBooking.startTime ? editingBooking.startTime.split('T') : [];
+        const endParts = editingBooking.endTime ? editingBooking.endTime.split('T') : [];
+        setDate(startParts[0] || initialDate || '');
+        setStartTime(startParts[1] ? startParts[1].substring(0, 5) : '09:00');
+        setEndTime(endParts[1] ? endParts[1].substring(0, 5) : '10:00');
+        setMeetingPlatform(editingBooking.meetingType || 'meet');
+        setCustomLink(editingBooking.meetingLink || '');
+        setSelectedAttendees(editingBooking.attendees || []);
+        setErrorMsg('');
+      } else {
+        setTitle('');
+        setDescription('');
+        setSelectedRoomId(initialRoomId || 'room1');
+        
+        const now = new Date();
+        const localYear = now.getFullYear();
+        const localMonth = String(now.getMonth() + 1).padStart(2, '0');
+        const localDay = String(now.getDate()).padStart(2, '0');
+        const todayStr = `${localYear}-${localMonth}-${localDay}`;
+        setDate(initialDate || todayStr);
+        setStartTime('09:00');
+        setEndTime('10:00');
+        setMeetingPlatform('meet');
+        setCustomLink('');
+        setSelectedAttendees([]);
+        setErrorMsg('');
+      }
       
       // Fetch users from Firebase
       fetchUsers();
     }
-  }, [isOpen, initialRoomId, initialDate]);
+  }, [isOpen, initialRoomId, initialDate, editingBooking]);
 
   const fetchUsers = async () => {
     setLoadingUsers(true);
@@ -163,6 +181,7 @@ export default function BookingModal({
       const endISO = `${date}T${endTime}`;
       
       const overlappingBooking = bookings.find(b => {
+        if (editingBooking && b.id === editingBooking.id) return false;
         if (b.roomId !== selectedRoomId) return false;
         if (b.status === 'rejected') return false;
         return b.startTime < endISO && startISO < b.endTime;
@@ -188,7 +207,7 @@ export default function BookingModal({
       // Auto link format or custom link
       let finalLink = customLink;
       if (meetingPlatform === 'meet') {
-        finalLink = ''; // Google Meet link will be injected by the Calendar Sync step
+        finalLink = editingBooking ? (editingBooking.meetingLink || '') : ''; // Preserve existing link or inject via sync
       }
 
       // Attendees mapping
@@ -206,16 +225,16 @@ export default function BookingModal({
         roomName,
         startTime: startISO,
         endTime: endISO,
-        status: isAdmin ? 'approved' : 'pending', // Admins bypass approvals, employees default to pending
+        status: editingBooking ? editingBooking.status : (isAdmin ? 'approved' : 'pending'), // Preserve status if editing or auto-approve for admin
         attendees: mappedAttendees,
         meetingType: meetingPlatform,
         meetingLink: finalLink
-      });
+      }, editingBooking?.id);
 
       onClose();
     } catch (err: any) {
       console.error(err);
-      setErrorMsg(err.message || 'เกิดข้อผิดพลาดในการสร้างข้อมูลจอง');
+      setErrorMsg(err.message || 'เกิดข้อผิดพลาดในการบันทึกข้อมูล');
     } finally {
       setIsSubmitting(false);
     }
@@ -237,8 +256,12 @@ export default function BookingModal({
         {/* Modal Header */}
         <div className="p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
           <div className="space-y-1">
-            <h3 className="font-bold text-slate-800 text-lg">จองห้องประชุมใหม่</h3>
-            <p className="text-xs text-slate-500">กรอกข้อมูลเพื่อสร้างกิจกรรมจองและเลือกช่องทางประชุม</p>
+            <h3 className="font-bold text-slate-800 text-lg">
+              {editingBooking ? 'แก้ไขกิจกรรมการจองห้องประชุม' : 'จองห้องประชุมใหม่'}
+            </h3>
+            <p className="text-xs text-slate-500">
+              {editingBooking ? 'ปรับเปลี่ยนเวลา ห้องประชุม หรือรายละเอียดกิจกรรม' : 'กรอกข้อมูลเพื่อสร้างกิจกรรมจองและเลือกช่องทางประชุม'}
+            </p>
           </div>
           <button 
             onClick={onClose}
@@ -499,12 +522,12 @@ export default function BookingModal({
             type="button"
             onClick={handleSubmitForm}
             disabled={isSubmitting}
-            className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-xl shadow-sm transition-colors flex items-center space-x-2 disabled:opacity-50"
+            className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-xl shadow-sm transition-colors flex items-center space-x-2 disabled:opacity-50 cursor-pointer"
           >
             {isSubmitting ? (
               <span>กำลังบันทึก...</span>
             ) : (
-              <span>ยืนยันการจอง</span>
+              <span>{editingBooking ? 'บันทึกการแก้ไข' : 'ยืนยันการจอง'}</span>
             )}
           </button>
         </div>

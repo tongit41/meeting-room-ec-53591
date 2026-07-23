@@ -149,33 +149,47 @@ export async function createGoogleCalendarEvent(
  */
 export async function deleteGoogleCalendarEvent(
   accessToken: string,
-  eventId: string
+  eventId: string,
+  fallbackToken?: string | null
 ): Promise<boolean> {
-  try {
-    const url = `https://www.googleapis.com/calendar/v3/calendars/primary/events/${eventId}?sendUpdates=all`;
-    const response = await fetch(url, {
-      method: 'DELETE',
-      headers: {
-        'Authorization': `Bearer ${accessToken}`
+  const tryDelete = async (tokenToUse: string): Promise<{ success: boolean; status: number }> => {
+    try {
+      const url = `https://www.googleapis.com/calendar/v3/calendars/primary/events/${eventId}?sendUpdates=all`;
+      const response = await fetch(url, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${tokenToUse}`
+        }
+      });
+
+      if (response.status === 200 || response.status === 204 || response.status === 410) {
+        return { success: true, status: response.status };
       }
-    });
 
-    if (response.status === 410 || response.status === 404) {
-      // Event already deleted or doesn't exist, which is fine
-      return true;
-    }
-
-    if (!response.ok) {
       const errText = await response.text();
-      console.warn(`Failed to delete Google Calendar event: ${response.status} - ${errText}`);
-      return false;
+      console.warn(`Failed to delete Google Calendar event (${response.status}): ${errText}`);
+      return { success: false, status: response.status };
+    } catch (error) {
+      console.error('Error deleting Google Calendar event:', error);
+      return { success: false, status: 500 };
     }
+  };
 
-    return true;
-  } catch (error) {
-    console.error('Error deleting Google Calendar event:', error);
-    return false;
+  if (accessToken) {
+    const res = await tryDelete(accessToken);
+    if (res.success) return true;
+    
+    if (fallbackToken && fallbackToken !== accessToken) {
+      console.log('Retrying Google Calendar event deletion with fallback token...');
+      const fallbackRes = await tryDelete(fallbackToken);
+      if (fallbackRes.success) return true;
+    }
+  } else if (fallbackToken) {
+    const fallbackRes = await tryDelete(fallbackToken);
+    if (fallbackRes.success) return true;
   }
+
+  return false;
 }
 
 /**

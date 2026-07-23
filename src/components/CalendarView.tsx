@@ -11,7 +11,8 @@ import {
   Info,
   CheckCircle,
   AlertCircle,
-  Trash2
+  Trash2,
+  Pencil
 } from 'lucide-react';
 import { Booking, RoomId, MeetingRoom } from '../types';
 import { MEETING_ROOMS } from '../lib/firebase';
@@ -23,6 +24,7 @@ interface CalendarViewProps {
   currentUserEmail: string | null;
   isAdmin: boolean;
   onDeleteBooking?: (bookingId: string) => void;
+  onEditBooking?: (booking: Booking) => void;
 }
 
 export default function CalendarView({
@@ -31,7 +33,8 @@ export default function CalendarView({
   onOpenBookingModal,
   currentUserEmail,
   isAdmin,
-  onDeleteBooking
+  onDeleteBooking,
+  onEditBooking
 }: CalendarViewProps) {
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
@@ -351,6 +354,16 @@ export default function CalendarView({
                             <Video className="h-3.5 w-3.5" />
                             <span>เข้าร่วมสายประชุมออนไลน์</span>
                           </a>
+                        )}
+                        {(isAdmin || currentUserEmail === b.creatorEmail) && onEditBooking && (
+                          <button
+                            onClick={() => onEditBooking(b)}
+                            className="p-1.5 rounded-lg border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 transition-all cursor-pointer flex items-center justify-center text-xs gap-1 font-semibold px-2.5"
+                            title="แก้ไขกิจกรรมเลื่อนเวลา"
+                          >
+                            <Pencil className="h-3.5 w-3.5" />
+                            <span>แก้ไข</span>
+                          </button>
                         )}
                         {(isAdmin || currentUserEmail === b.creatorEmail) && onDeleteBooking && (
                           <button

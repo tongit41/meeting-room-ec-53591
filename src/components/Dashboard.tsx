@@ -14,7 +14,8 @@ import {
   MessageCircle,
   Video,
   Trash2,
-  FileUp
+  FileUp,
+  Pencil
 } from 'lucide-react';
 import { Booking, MeetingRoom, RoomId } from '../types';
 import { MEETING_ROOMS } from '../lib/firebase';
@@ -27,6 +28,7 @@ interface DashboardProps {
   currentUserEmail: string | null;
   onSelectTab: (tab: string) => void;
   onDeleteBooking?: (bookingId: string) => void;
+  onEditBooking?: (booking: Booking) => void;
   onOpenImportModal?: () => void;
 }
 
@@ -38,6 +40,7 @@ export default function Dashboard({
   currentUserEmail,
   onSelectTab,
   onDeleteBooking,
+  onEditBooking,
   onOpenImportModal
 }: DashboardProps) {
   const [now, setNow] = useState(new Date());
@@ -448,7 +451,17 @@ export default function Dashboard({
                             </span>
                           )}
                         </td>
-                        <td className="py-3.5 px-4 text-right">
+                        <td className="py-3.5 px-4 text-right space-x-1.5">
+                          {(isAdmin || currentUserEmail === b.creatorEmail) && onEditBooking && (
+                            <button
+                              onClick={() => onEditBooking(b)}
+                              className="inline-flex items-center space-x-1 text-xs px-2.5 py-1.5 rounded-md border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-semibold transition-all cursor-pointer"
+                              title="แก้ไขกิจกรรมเลื่อนเวลา"
+                            >
+                              <Pencil className="h-3.5 w-3.5 shrink-0" />
+                              <span>แก้ไข</span>
+                            </button>
+                          )}
                           {(isAdmin || currentUserEmail === b.creatorEmail) && onDeleteBooking && (
                             <button
                               onClick={() => onDeleteBooking(b.id)}
