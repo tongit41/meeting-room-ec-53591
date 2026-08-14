@@ -47,10 +47,13 @@ export default function BookingModal({
 }: BookingModalProps) {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
-  const [selectedRoomId, setSelectedRoomId] = useState<RoomId>('room1');
-  const [date, setDate] = useState('');
+  const [selectedRoomId, setSelectedRoomId] = useState<RoomId | ''>('');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
   const [startTime, setStartTime] = useState('09:00');
   const [endTime, setEndTime] = useState('10:00');
+  const [dateMode, setDateMode] = useState<'range' | 'specific_days'>('range');
+  const [selectedDays, setSelectedDays] = useState<number[]>([1, 2, 3, 4, 5]); // Default Mon-Fri
   const [meetingPlatform, setMeetingPlatform] = useState<MeetingPlatform>('meet');
   const [customLink, setCustomLink] = useState('');
   const [availableUsers, setAvailableUsers] = useState<UserAccount[]>([]);
@@ -60,17 +63,52 @@ export default function BookingModal({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
 
+  const DAYS_OF_WEEK = [
+    { id: 1, label: 'จ.', fullName: 'จันทร์' },
+    { id: 2, label: 'อ.', fullName: 'อังคาร' },
+    { id: 3, label: 'พ.', fullName: 'พุธ' },
+    { id: 4, label: 'พฤ.', fullName: 'พฤหัสบดี' },
+    { id: 5, label: 'ศ.', fullName: 'ศุกร์' },
+    { id: 6, label: 'ส.', fullName: 'เสาร์' },
+    { id: 0, label: 'อา.', fullName: 'อาทิตย์' },
+  ];
+
+  const calculateMatchingDates = (): string[] => {
+    if (!startDate || !endDate || endDate < startDate) return [];
+    const result: string[] = [];
+    const start = new Date(startDate + 'T00:00:00');
+    const end = new Date(endDate + 'T00:00:00');
+    const curr = new Date(start);
+
+    while (curr <= end) {
+      const year = curr.getFullYear();
+      const month = String(curr.getMonth() + 1).padStart(2, '0');
+      const day = String(curr.getDate()).padStart(2, '0');
+      const dateStr = `${year}-${month}-${day}`;
+      const dayOfWeek = curr.getDay(); // 0=Sun, 1=Mon, ..., 6=Sat
+
+      if (dateMode === 'range' || selectedDays.includes(dayOfWeek)) {
+        result.push(dateStr);
+      }
+      curr.setDate(curr.getDate() + 1);
+    }
+    return result;
+  };
+
+  const matchingDates = calculateMatchingDates();
+
   // Hydrate fields on open/props change
   useEffect(() => {
     if (isOpen) {
       if (editingBooking) {
         setTitle(editingBooking.title || '');
         setDescription(editingBooking.description || '');
-        setSelectedRoomId(editingBooking.roomId || 'room1');
+        setSelectedRoomId(editingBooking.roomId || '');
         
         const startParts = editingBooking.startTime ? editingBooking.startTime.split('T') : [];
         const endParts = editingBooking.endTime ? editingBooking.endTime.split('T') : [];
-        setDate(startParts[0] || initialDate || '');
+        setStartDate(startParts[0] || initialDate || '');
+        setEndDate(endParts[0] || startParts[0] || initialDate || '');
         setStartTime(startParts[1] ? startParts[1].substring(0, 5) : '09:00');
         setEndTime(endParts[1] ? endParts[1].substring(0, 5) : '10:00');
         setMeetingPlatform(editingBooking.meetingType || 'meet');
@@ -80,14 +118,15 @@ export default function BookingModal({
       } else {
         setTitle('');
         setDescription('');
-        setSelectedRoomId(initialRoomId || 'room1');
+        setSelectedRoomId(initialRoomId || '');
         
         const now = new Date();
         const localYear = now.getFullYear();
         const localMonth = String(now.getMonth() + 1).padStart(2, '0');
         const localDay = String(now.getDate()).padStart(2, '0');
         const todayStr = `${localYear}-${localMonth}-${localDay}`;
-        setDate(initialDate || todayStr);
+        setStartDate(initialDate || todayStr);
+        setEndDate(initialDate || todayStr);
         setStartTime('09:00');
         setEndTime('10:00');
         setMeetingPlatform('meet');
@@ -165,8 +204,13 @@ export default function BookingModal({
       return;
     }
 
-    if (meetingPlatform === 'external' && !customLink.trim()) {
-      setErrorMsg('กรุณากรอกลิงก์ประชุมออนไลน์สำหรับช่องทางภายนอก');
+    if (!startDate || !endDate) {
+      setErrorMsg('กรุณาเลือกวันที่เริ่มต้นและวันที่สิ้นสุดการจอง');
+      return;
+    }
+
+    if (endDate < startDate) {
+      setErrorMsg('วันที่สิ้นสุดการจองต้องไม่ย้อนหลังก่อนวันที่เริ่มต้น');
       return;
     }
 
@@ -175,39 +219,83 @@ export default function BookingModal({
       return;
     }
 
-    // Check for overlapping bookings
-    if (bookings && bookings.length > 0) {
-      const startISO = `${date}T${startTime}`;
-      const endISO = `${date}T${endTime}`;
-      
-      const overlappingBooking = bookings.find(b => {
-        if (editingBooking && b.id === editingBooking.id) return false;
-        if (b.roomId !== selectedRoomId) return false;
-        if (b.status === 'rejected') return false;
-        return b.startTime < endISO && startISO < b.endTime;
-      });
+    if (meetingPlatform === 'external' && !customLink.trim()) {
+      setErrorMsg('กรุณากรอกลิงก์ประชุมออนไลน์สำหรับช่องทางภายนอก');
+      return;
+    }
 
-      if (overlappingBooking) {
-        setErrorMsg(
-          `ห้องประชุมนี้ถูกจองไว้แล้วในช่วงเวลาดังกล่าว\n\nหัวข้อ: ${overlappingBooking.title}\nเวลา: ${overlappingBooking.startTime.split('T')[1]} - ${overlappingBooking.endTime.split('T')[1]} น.`
-        );
-        return;
+    if (dateMode === 'specific_days' && selectedDays.length === 0) {
+      setErrorMsg('กรุณาเลือกวันในสัปดาห์ที่ต้องการจองอย่างน้อย 1 วัน');
+      return;
+    }
+
+    const targetDates = calculateMatchingDates();
+    if (targetDates.length === 0) {
+      setErrorMsg('ไม่พบวันที่ตรงกับเงื่อนไขการจองในช่วงวันที่เลือก');
+      return;
+    }
+
+    // Room Overlap Check (Only if a physical room is selected)
+    if (selectedRoomId && bookings && bookings.length > 0) {
+      if (dateMode === 'range') {
+        const startISO = `${startDate}T${startTime}`;
+        const endISO = `${endDate}T${endTime}`;
+
+        const overlappingBooking = bookings.find(b => {
+          if (editingBooking && b.id === editingBooking.id) return false;
+          if (b.roomId !== selectedRoomId) return false;
+          if (b.status === 'rejected') return false;
+          return b.startTime < endISO && startISO < b.endTime;
+        });
+
+        if (overlappingBooking) {
+          const oStartParts = overlappingBooking.startTime.split('T');
+          const oEndParts = overlappingBooking.endTime.split('T');
+          const oStartFormatted = oStartParts[0] === startDate ? `${oStartParts[1]} น.` : `${oStartParts[0]} ${oStartParts[1]} น.`;
+          const oEndFormatted = oEndParts[0] === endDate ? `${oEndParts[1]} น.` : `${oEndParts[0]} ${oEndParts[1]} น.`;
+
+          setErrorMsg(
+            `ห้องประชุมนี้ถูกจองไว้แล้วในช่วงเวลาดังกล่าว\n\nหัวข้อที่ทับซ้อน: ${overlappingBooking.title}\nเวลา: ${oStartFormatted} - ${oEndFormatted}`
+          );
+          return;
+        }
+      } else {
+        // Specific days check
+        for (const d of targetDates) {
+          const startISO = `${d}T${startTime}`;
+          const endISO = `${d}T${endTime}`;
+
+          const overlappingBooking = bookings.find(b => {
+            if (editingBooking && b.id === editingBooking.id) return false;
+            if (b.roomId !== selectedRoomId) return false;
+            if (b.status === 'rejected') return false;
+            return b.startTime < endISO && startISO < b.endTime;
+          });
+
+          if (overlappingBooking) {
+            const oStartParts = overlappingBooking.startTime.split('T');
+            const oEndParts = overlappingBooking.endTime.split('T');
+            const oStartFormatted = `${oStartParts[0]} ${oStartParts[1]} น.`;
+            const oEndFormatted = `${oEndParts[0]} ${oEndParts[1]} น.`;
+
+            setErrorMsg(
+              `ห้องประชุมนี้ถูกจองไว้แล้วในวันที่ ${d}\n\nหัวข้อที่ทับซ้อน: ${overlappingBooking.title}\nเวลา: ${oStartFormatted} - ${oEndFormatted}`
+            );
+            return;
+          }
+        }
       }
     }
 
     setIsSubmitting(true);
     try {
-      // Build ISO times
-      const startISO = `${date}T${startTime}`;
-      const endISO = `${date}T${endTime}`;
-
       const selectedRoom = rooms.find(r => r.id === selectedRoomId);
-      const roomName = selectedRoom ? selectedRoom.name : 'ห้องประชุม 1 (Focus Room)';
+      const roomName = selectedRoom ? selectedRoom.name : 'ไม่ระบุห้องประชุม / ออนไลน์';
 
       // Auto link format or custom link
       let finalLink = customLink;
       if (meetingPlatform === 'meet') {
-        finalLink = editingBooking ? (editingBooking.meetingLink || '') : ''; // Preserve existing link or inject via sync
+        finalLink = editingBooking ? (editingBooking.meetingLink || '') : '';
       }
 
       // Attendees mapping
@@ -217,19 +305,71 @@ export default function BookingModal({
         nickname: a.nickname
       }));
 
-      // Submit
-      await onSubmit({
-        title,
-        description,
-        roomId: selectedRoomId,
-        roomName,
-        startTime: startISO,
-        endTime: endISO,
-        status: editingBooking ? editingBooking.status : (isAdmin ? 'approved' : 'pending'), // Preserve status if editing or auto-approve for admin
-        attendees: mappedAttendees,
-        meetingType: meetingPlatform,
-        meetingLink: finalLink
-      }, editingBooking?.id);
+      if (dateMode === 'range' || targetDates.length === 1) {
+        const startISO = `${startDate}T${startTime}`;
+        const endISO = `${endDate}T${endTime}`;
+
+        await onSubmit({
+          title,
+          description,
+          roomId: selectedRoomId as RoomId,
+          roomName,
+          startTime: startISO,
+          endTime: endISO,
+          status: editingBooking ? editingBooking.status : (isAdmin ? 'approved' : 'pending'),
+          attendees: mappedAttendees,
+          meetingType: meetingPlatform,
+          meetingLink: finalLink
+        }, editingBooking?.id);
+      } else {
+        // Multi-day specific creation/update
+        if (editingBooking) {
+          const firstDate = targetDates[0];
+          await onSubmit({
+            title,
+            description,
+            roomId: selectedRoomId as RoomId,
+            roomName,
+            startTime: `${firstDate}T${startTime}`,
+            endTime: `${firstDate}T${endTime}`,
+            status: editingBooking.status,
+            attendees: mappedAttendees,
+            meetingType: meetingPlatform,
+            meetingLink: finalLink
+          }, editingBooking.id);
+
+          for (let i = 1; i < targetDates.length; i++) {
+            const d = targetDates[i];
+            await onSubmit({
+              title,
+              description,
+              roomId: selectedRoomId as RoomId,
+              roomName,
+              startTime: `${d}T${startTime}`,
+              endTime: `${d}T${endTime}`,
+              status: isAdmin ? 'approved' : 'pending',
+              attendees: mappedAttendees,
+              meetingType: meetingPlatform,
+              meetingLink: finalLink
+            });
+          }
+        } else {
+          for (const d of targetDates) {
+            await onSubmit({
+              title,
+              description,
+              roomId: selectedRoomId as RoomId,
+              roomName,
+              startTime: `${d}T${startTime}`,
+              endTime: `${d}T${endTime}`,
+              status: isAdmin ? 'approved' : 'pending',
+              attendees: mappedAttendees,
+              meetingType: meetingPlatform,
+              meetingLink: finalLink
+            });
+          }
+        }
+      }
 
       onClose();
     } catch (err: any) {
@@ -322,70 +462,257 @@ export default function BookingModal({
             </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            {/* Room Selection */}
-            <div>
-              <label className="block text-xs font-bold text-slate-600 mb-1">เลือกห้องประชุม *</label>
-              <div className="relative">
-                <select 
-                  value={selectedRoomId}
-                  onChange={e => setSelectedRoomId(e.target.value as RoomId)}
-                  className="w-full appearance-none px-3.5 py-2 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 bg-white"
-                >
-                  {rooms.map(r => (
-                    <option key={r.id} value={r.id}>
-                      {r.name}
-                    </option>
-                  ))}
-                </select>
-                <ChevronDown className="h-4 w-4 text-slate-400 absolute right-3.5 top-3 pointer-events-none" />
-              </div>
+          {/* Room Selection */}
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label className="block text-xs font-bold text-slate-600">เลือกห้องประชุม (ไม่บังคับ)</label>
+              <span className="text-[10px] text-slate-400">เลือก "ไม่ระบุห้องประชุม" สำหรับประชุมออนไลน์หรือนอกสถานที่</span>
             </div>
-
-            {/* Date Selection */}
-            <div>
-              <label className="block text-xs font-bold text-slate-600 mb-1">วันที่ต้องการจอง *</label>
-              <input 
-                type="date"
-                required
-                value={date}
-                onChange={e => setDate(e.target.value)}
-                className="w-full px-3.5 py-2 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
-              />
+            <div className="relative">
+              <select 
+                value={selectedRoomId}
+                onChange={e => setSelectedRoomId(e.target.value as RoomId | '')}
+                className="w-full appearance-none px-3.5 py-2 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 bg-white cursor-pointer"
+              >
+                <option value="">-- ไม่ระบุห้องประชุม (ประชุมออนไลน์ / นอกสถานที่) --</option>
+                {rooms.map(r => (
+                  <option key={r.id} value={r.id}>
+                    {r.name}
+                  </option>
+                ))}
+              </select>
+              <ChevronDown className="h-4 w-4 text-slate-400 absolute right-3.5 top-3 pointer-events-none" />
             </div>
           </div>
 
-          {/* Time Slot Selection */}
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-xs font-bold text-slate-600 mb-1">เวลาเริ่มประชุม *</label>
-              <div className="relative">
-                <select
-                  value={startTime}
-                  onChange={e => setStartTime(e.target.value)}
-                  className="w-full appearance-none px-3.5 py-2 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 bg-white"
+          {/* Date & Time Range Selection */}
+          <div className="space-y-3.5 bg-slate-50/80 p-4 rounded-xl border border-slate-200/80">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <label className="block text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                <Calendar className="h-4 w-4 text-indigo-600" />
+                <span>รูปแบบการเลือกวันที่ต้องการจอง *</span>
+              </label>
+
+              {/* Date Selection Mode Switcher */}
+              <div className="flex items-center bg-slate-200/70 p-1 rounded-lg text-xs">
+                <button
+                  type="button"
+                  onClick={() => setDateMode('range')}
+                  className={`px-2.5 py-1 rounded-md font-semibold transition-all cursor-pointer ${
+                    dateMode === 'range'
+                      ? 'bg-white text-indigo-700 shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
                 >
-                  {timeSlots.map(slot => (
-                    <option key={`start-${slot}`} value={slot}>{slot} น.</option>
-                  ))}
-                </select>
-                <ChevronDown className="h-4 w-4 text-slate-400 absolute right-3.5 top-3 pointer-events-none" />
+                  ช่วงวันต่อเนื่อง
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDateMode('specific_days');
+                    // Auto-set 1 month duration if startDate and endDate are identical or invalid
+                    if (!endDate || endDate <= startDate) {
+                      const base = startDate ? new Date(startDate + 'T00:00:00') : new Date();
+                      base.setMonth(base.getMonth() + 1);
+                      const y = base.getFullYear();
+                      const m = String(base.getMonth() + 1).padStart(2, '0');
+                      const d = String(base.getDate()).padStart(2, '0');
+                      setEndDate(`${y}-${m}-${d}`);
+                    }
+                  }}
+                  className={`px-2.5 py-1 rounded-md font-semibold transition-all cursor-pointer ${
+                    dateMode === 'specific_days'
+                      ? 'bg-white text-indigo-700 shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  เลือกตามวันในสัปดาห์
+                </button>
               </div>
             </div>
 
+            {/* Date Inputs */}
             <div>
-              <label className="block text-xs font-bold text-slate-600 mb-1">เวลาสิ้นสุดประชุม *</label>
-              <div className="relative">
-                <select
-                  value={endTime}
-                  onChange={e => setEndTime(e.target.value)}
-                  className="w-full appearance-none px-3.5 py-2 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 bg-white"
-                >
-                  {timeSlots.map(slot => (
-                    <option key={`end-${slot}`} value={slot}>{slot} น.</option>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-500 mb-1">
+                    {dateMode === 'specific_days' ? 'วันที่เริ่มนับการจอง *' : 'วันที่เริ่มต้น *'}
+                  </label>
+                  <input 
+                    type="date"
+                    required
+                    value={startDate}
+                    onChange={e => {
+                      const val = e.target.value;
+                      setStartDate(val);
+                      if (!endDate || endDate < val) {
+                        setEndDate(val);
+                      }
+                    }}
+                    className="w-full px-3 py-1.5 text-xs rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 bg-white"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-500 mb-1">
+                    {dateMode === 'specific_days' ? 'วันที่สิ้นสุดช่วงเวลา *' : 'วันที่สิ้นสุด *'}
+                  </label>
+                  <input 
+                    type="date"
+                    required
+                    min={startDate}
+                    value={endDate}
+                    onChange={e => setEndDate(e.target.value)}
+                    className="w-full px-3 py-1.5 text-xs rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 bg-white"
+                  />
+                </div>
+              </div>
+
+              {/* Quick Period Presets for Specific Days Mode */}
+              {dateMode === 'specific_days' && (
+                <div className="mt-2 flex items-center gap-1.5 flex-wrap">
+                  <span className="text-[10px] font-medium text-slate-500">ขยายช่วงเวลาสร้างรายการ:</span>
+                  {[
+                    { label: '+1 สัปดาห์', weeks: 1, months: 0 },
+                    { label: '+2 สัปดาห์', weeks: 2, months: 0 },
+                    { label: '+1 เดือน', weeks: 0, months: 1 },
+                    { label: '+2 เดือน', weeks: 0, months: 2 },
+                    { label: '+3 เดือน', weeks: 0, months: 3 },
+                  ].map(p => (
+                    <button
+                      key={p.label}
+                      type="button"
+                      onClick={() => {
+                        const base = startDate ? new Date(startDate + 'T00:00:00') : new Date();
+                        if (p.weeks > 0) base.setDate(base.getDate() + p.weeks * 7 - 1);
+                        if (p.months > 0) base.setMonth(base.getMonth() + p.months);
+                        const y = base.getFullYear();
+                        const m = String(base.getMonth() + 1).padStart(2, '0');
+                        const d = String(base.getDate()).padStart(2, '0');
+                        setEndDate(`${y}-${m}-${d}`);
+                      }}
+                      className="text-[10px] font-semibold bg-white text-indigo-700 hover:bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded-md transition-colors cursor-pointer"
+                    >
+                      {p.label}
+                    </button>
                   ))}
-                </select>
-                <ChevronDown className="h-4 w-4 text-slate-400 absolute right-3.5 top-3 pointer-events-none" />
+                </div>
+              )}
+            </div>
+
+            {/* Day of Week Selection (Only when mode === 'specific_days') */}
+            {dateMode === 'specific_days' && (
+              <div className="space-y-2 pt-2 border-t border-slate-200/60">
+                <div className="flex items-center justify-between">
+                  <label className="block text-[11px] font-bold text-slate-700">
+                    เลือกระบุวันในสัปดาห์ (เช่น จันทร์, พุธ, ศุกร์) *
+                  </label>
+                  <div className="flex items-center space-x-2 text-[10px]">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedDays([1, 2, 3, 4, 5])}
+                      className="text-indigo-600 hover:underline font-semibold cursor-pointer"
+                    >
+                      วันทำการ (จ.-ศ.)
+                    </button>
+                    <span className="text-slate-300">|</span>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedDays([0, 1, 2, 3, 4, 5, 6])}
+                      className="text-indigo-600 hover:underline font-semibold cursor-pointer"
+                    >
+                      ทุกวัน
+                    </button>
+                    <span className="text-slate-300">|</span>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedDays([])}
+                      className="text-rose-500 hover:underline font-semibold cursor-pointer"
+                    >
+                      ล้าง
+                    </button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-7 gap-1.5">
+                  {DAYS_OF_WEEK.map(d => {
+                    const isSelected = selectedDays.includes(d.id);
+                    return (
+                      <button
+                        key={d.id}
+                        type="button"
+                        onClick={() => {
+                          if (isSelected) {
+                            setSelectedDays(selectedDays.filter(id => id !== d.id));
+                          } else {
+                            setSelectedDays([...selectedDays, d.id]);
+                          }
+                        }}
+                        className={`py-2 px-1 text-center rounded-lg text-xs font-bold border transition-all cursor-pointer ${
+                          isSelected
+                            ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs ring-2 ring-indigo-500/20'
+                            : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-100'
+                        }`}
+                        title={d.fullName}
+                      >
+                        {d.label}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Calculation preview */}
+                {matchingDates.length > 0 ? (
+                  <div className="bg-indigo-50/80 border border-indigo-200/80 p-2 rounded-lg text-xs text-indigo-900 flex items-center justify-between">
+                    <span className="font-semibold">
+                      🗓️ รวมเป็นรายการจองทั้งหมด <strong>{matchingDates.length} วัน</strong>
+                    </span>
+                    <span className="text-[10px] text-indigo-700 bg-white px-2 py-0.5 rounded border border-indigo-200 font-mono">
+                      {matchingDates.length <= 3 
+                        ? matchingDates.join(', ')
+                        : `${matchingDates.slice(0, 3).join(', ')} ... (${matchingDates[matchingDates.length - 1]})`}
+                    </span>
+                  </div>
+                ) : (
+                  <p className="text-[11px] text-rose-500 font-semibold">
+                    * กรุณาเลือกระบุวันในสัปดาห์อย่างน้อย 1 วัน
+                  </p>
+                )}
+              </div>
+            )}
+
+            {/* Time Slot Selection */}
+            <div className="grid grid-cols-2 gap-3 pt-2 border-t border-slate-200/50">
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-500 mb-1">เวลาเริ่มต้น *</label>
+                <div className="relative">
+                  <select
+                    value={startTime}
+                    onChange={e => setStartTime(e.target.value)}
+                    className="w-full appearance-none px-3 py-1.5 text-xs rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 bg-white cursor-pointer"
+                  >
+                    {timeSlots.map(slot => (
+                      <option key={`start-${slot}`} value={slot}>{slot} น.</option>
+                    ))}
+                  </select>
+                  <ChevronDown className="h-3.5 w-3.5 text-slate-400 absolute right-3 top-2.5 pointer-events-none" />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-500 mb-1">เวลาสิ้นสุด *</label>
+                <div className="relative">
+                  <select
+                    value={endTime}
+                    onChange={e => setEndTime(e.target.value)}
+                    className="w-full appearance-none px-3 py-1.5 text-xs rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 bg-white cursor-pointer"
+                  >
+                    {timeSlots.map(slot => (
+                      <option key={`end-${slot}`} value={slot}>{slot} น.</option>
+                    ))}
+                  </select>
+                  <ChevronDown className="h-3.5 w-3.5 text-slate-400 absolute right-3 top-2.5 pointer-events-none" />
+                </div>
               </div>
             </div>
           </div>

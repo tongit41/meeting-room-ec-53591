@@ -75,8 +75,9 @@ export default function Dashboard({
   const localDay = String(now.getDate()).padStart(2, '0');
   const todayStr = `${localYear}-${localMonth}-${localDay}`;
   const todayBookings = bookings.filter(b => {
-    const bDate = b.startTime.split('T')[0];
-    return bDate === todayStr && b.status === 'approved';
+    const bStart = b.startTime.split('T')[0];
+    const bEnd = b.endTime ? b.endTime.split('T')[0] : bStart;
+    return todayStr >= bStart && todayStr <= bEnd && b.status === 'approved';
   });
 
   const pendingBookings = bookings.filter(b => b.status === 'pending');
@@ -393,6 +394,7 @@ export default function Dashboard({
                   .sort((a, b) => a.startTime.localeCompare(b.startTime))
                   .map(b => {
                     const roomColorMap: Record<RoomId, string> = {
+                      '': 'bg-slate-100 text-slate-700 border-slate-200',
                       room1: 'bg-emerald-50 text-emerald-700 border-emerald-200',
                       room2: 'bg-indigo-50 text-indigo-700 border-indigo-200',
                       room3: 'bg-amber-50 text-amber-700 border-amber-200',
@@ -415,8 +417,8 @@ export default function Dashboard({
                     return (
                       <tr key={b.id} className="hover:bg-slate-50/50 transition-colors">
                         <td className="py-3.5 px-4 font-medium">
-                          <span className={`text-xs font-semibold px-2.5 py-1 rounded-md border ${roomColorMap[b.roomId]}`}>
-                            {b.roomName.split(' (')[0]}
+                          <span className={`text-xs font-semibold px-2.5 py-1 rounded-md border ${roomColorMap[b.roomId] || 'bg-slate-100 text-slate-700 border-slate-200'}`}>
+                            {b.roomName ? b.roomName.split(' (')[0] : 'ไม่ระบุห้องประชุม'}
                           </span>
                         </td>
                         <td className="py-3.5 px-4">

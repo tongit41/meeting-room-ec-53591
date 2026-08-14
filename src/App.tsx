@@ -55,7 +55,10 @@ import {
   Check, 
   AlertCircle,
   HelpCircle,
-  ShieldCheck
+  ShieldCheck,
+  LogIn,
+  Info,
+  CheckCircle2
 } from 'lucide-react';
 
 export default function App() {
@@ -65,16 +68,6 @@ export default function App() {
   const [needsAuth, setNeedsAuth] = useState(true);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
-
-  // States for Alternative / Bypass Login form
-  const [loginMethod, setLoginMethod] = useState<'google' | 'bypass'>('google');
-  const [bypassEmail, setBypassEmail] = useState('');
-  const [bypassName, setBypassName] = useState('');
-  const [bypassNickname, setBypassNickname] = useState('');
-  const [bypassRole, setBypassRole] = useState<'admin' | 'employee'>('employee');
-  const [isBypassSubmitting, setIsBypassSubmitting] = useState(false);
-  const [quickLoginEmail, setQuickLoginEmail] = useState('');
-  const [isQuickLoggingIn, setIsQuickLoggingIn] = useState(false);
 
   // App Core States
   const [bookings, setBookings] = useState<Booking[]>([]);
@@ -115,17 +108,31 @@ export default function App() {
         try {
           const userDocRef = doc(db, 'users', firebaseUser.uid);
           const userSnap = await getDoc(userDocRef);
+          const nowIso = new Date().toISOString();
+          const photoURL = firebaseUser.photoURL || undefined;
+
           if (userSnap.exists()) {
             const profile = userSnap.data() as UserAccount;
+            const updatedProfile: UserAccount = {
+              ...profile,
+              lastLoginAt: nowIso,
+              photoURL: photoURL || profile.photoURL,
+              displayName: profile.displayName || firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'พนักงาน'
+            };
+
             setUser(firebaseUser);
             setToken(accessToken);
-            setUserProfile(profile);
+            setUserProfile(updatedProfile);
             setNeedsAuth(false);
 
-            // If user is Admin and has accessToken, save it to Firestore for employee calendar sync deletions
-            if (profile.role === 'admin' && accessToken) {
-              await updateDoc(userDocRef, { googleAccessToken: accessToken });
-            }
+            // Update Firestore with lastLoginAt & photoURL
+            const updatePayload: any = {
+              lastLoginAt: nowIso
+            };
+            if (photoURL) updatePayload.photoURL = photoURL;
+            if (profile.role === 'admin' && accessToken) updatePayload.googleAccessToken = accessToken;
+            
+            await updateDoc(userDocRef, updatePayload);
           } else {
             // Profile does not exist yet. Let's look up by email to see if they are pre-registered!
             const email = (firebaseUser.email || '').toLowerCase();
@@ -143,7 +150,9 @@ export default function App() {
               const migratedProfile: UserAccount = {
                 ...foundProfile,
                 id: firebaseUser.uid,
-                email: email
+                email: email,
+                lastLoginAt: nowIso,
+                photoURL: photoURL || foundProfile.photoURL
               };
               
               await setDoc(userDocRef, migratedProfile);
@@ -167,7 +176,9 @@ export default function App() {
                 displayName: firebaseUser.displayName || 'IT Support',
                 nickname: 'IT Support',
                 role: 'admin',
-                createdAt: new Date().toISOString()
+                createdAt: nowIso,
+                lastLoginAt: nowIso,
+                photoURL
               };
               await setDoc(userDocRef, adminAccount);
               
@@ -192,7 +203,9 @@ export default function App() {
                 displayName: defaultDisplayName,
                 nickname: defaultNickname,
                 role: isITSupport ? 'admin' : 'employee',
-                createdAt: new Date().toISOString()
+                createdAt: nowIso,
+                lastLoginAt: nowIso,
+                photoURL
               };
 
               await setDoc(userDocRef, newAccount);
@@ -215,49 +228,7 @@ export default function App() {
         }
       },
       () => {
-        const sessionStr = localStorage.getItem('anonymous_user_session');
-        if (sessionStr) {
-          try {
-            const session = JSON.parse(sessionStr);
-            const savedEmail = (session.email || '').toLowerCase();
-            if (savedEmail) {
-              getDocs(query(collection(db, 'users'), where('email', '==', savedEmail)))
-                .then((qSnap) => {
-                  if (!qSnap.empty) {
-                    const docSnap = qSnap.docs[0];
-                    const foundProfile = docSnap.data() as UserAccount;
-                    const customUser = {
-                      uid: docSnap.id,
-                      email: foundProfile.email,
-                      displayName: foundProfile.displayName,
-                      photoURL: null
-                    } as unknown as FirebaseUser;
-                    setUser(customUser);
-                    setUserProfile(foundProfile);
-                    setToken('');
-                    setNeedsAuth(false);
-                  } else {
-                    localStorage.removeItem('anonymous_user_session');
-                    setUser(null);
-                    setUserProfile(null);
-                    setToken(null);
-                    setNeedsAuth(true);
-                  }
-                })
-                .catch((err) => {
-                  console.error('Error hydrating quick-login session:', err);
-                  localStorage.removeItem('anonymous_user_session');
-                  setUser(null);
-                  setUserProfile(null);
-                  setToken(null);
-                  setNeedsAuth(true);
-                });
-              return;
-            }
-          } catch (err) {
-            console.error('Failed fallback hydration:', err);
-          }
-        }
+        localStorage.removeItem('anonymous_user_session');
         setUser(null);
         setUserProfile(null);
         setToken(null);
@@ -326,14 +297,22 @@ export default function App() {
         try {
           const userDocRef = doc(db, 'users', result.user.uid);
           const userSnap = await getDoc(userDocRef);
+          const nowIso = new Date().toISOString();
+          const photoURL = result.user.photoURL || undefined;
+
           if (userSnap.exists()) {
             const profile = userSnap.data() as UserAccount;
-            setUserProfile(profile);
+            const updatedProfile: UserAccount = {
+              ...profile,
+              lastLoginAt: nowIso,
+              photoURL: photoURL || profile.photoURL
+            };
+            setUserProfile(updatedProfile);
             
-            // Save admin token for background calendar actions
-            if (profile.role === 'admin' && result.accessToken) {
-              await updateDoc(userDocRef, { googleAccessToken: result.accessToken });
-            }
+            const updatePayload: any = { lastLoginAt: nowIso };
+            if (photoURL) updatePayload.photoURL = photoURL;
+            if (profile.role === 'admin' && result.accessToken) updatePayload.googleAccessToken = result.accessToken;
+            await updateDoc(userDocRef, updatePayload);
           } else {
             // Check if pre-registered by email
             const email = (result.user.email || '').toLowerCase();
@@ -346,7 +325,9 @@ export default function App() {
               const migratedProfile: UserAccount = {
                 ...foundProfile,
                 id: result.user.uid,
-                email
+                email,
+                lastLoginAt: nowIso,
+                photoURL: photoURL || foundProfile.photoURL
               };
               await setDoc(userDocRef, migratedProfile);
               if (oldDocSnap.id !== result.user.uid) {
@@ -369,7 +350,9 @@ export default function App() {
                 displayName: defaultDisplayName,
                 nickname: defaultNickname,
                 role: email === 'itsupport@ec.co.th' ? 'admin' : 'employee',
-                createdAt: new Date().toISOString()
+                createdAt: nowIso,
+                lastLoginAt: nowIso,
+                photoURL
               };
 
               await setDoc(userDocRef, newAccount);
@@ -406,133 +389,6 @@ export default function App() {
       }
     } finally {
       setIsLoggingIn(false);
-    }
-  };
-
-  const handleBypassLogin = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!bypassEmail.trim() || !bypassName.trim()) {
-      setLoginError('กรุณากรอกอีเมลและชื่อ-นามสกุลให้ครบถ้วน');
-      return;
-    }
-    
-    if (!bypassEmail.includes('@') || !bypassEmail.includes('.')) {
-      setLoginError('กรุณากรอกอีเมลในรูปแบบที่ถูกต้อง');
-      return;
-    }
-
-    setIsBypassSubmitting(true);
-    setLoginError(null);
-    
-    try {
-      const finalNickname = bypassNickname.trim() || bypassName.trim().split(' ')[0] || 'คุณ';
-      
-      const session = {
-        email: bypassEmail.trim().toLowerCase(),
-        displayName: bypassName.trim(),
-        nickname: finalNickname,
-        role: bypassRole
-      };
-      localStorage.setItem('anonymous_user_session', JSON.stringify(session));
-
-      const result = await anonymousSignIn(session.email, session.displayName, session.nickname);
-      
-      if (result) {
-        setToken('');
-        setNeedsAuth(false);
-      }
-    } catch (err: any) {
-      console.error('Anonymous sign-in failed, using offline fallback mode:', err);
-      
-      const fallbackUid = 'mock_uid_' + Math.random().toString(36).substring(2, 11);
-      const finalNickname = bypassNickname.trim() || bypassName.trim().split(' ')[0] || 'คุณ';
-      
-      const session = {
-        email: bypassEmail.trim().toLowerCase(),
-        displayName: bypassName.trim(),
-        nickname: finalNickname,
-        role: bypassRole
-      };
-      
-      localStorage.setItem('anonymous_user_session', JSON.stringify(session));
-      
-      const customUser = {
-        uid: fallbackUid,
-        email: session.email,
-        displayName: session.displayName,
-        photoURL: null
-      } as unknown as FirebaseUser;
-      
-      setUser(customUser);
-      const profile = {
-        id: fallbackUid,
-        email: session.email,
-        displayName: session.displayName,
-        nickname: session.nickname,
-        role: session.role,
-        createdAt: new Date().toISOString()
-      };
-      setUserProfile(profile);
-      setToken('');
-      setNeedsAuth(false);
-
-      try {
-        await setDoc(doc(db, 'users', fallbackUid), profile);
-      } catch (dbErr) {
-        console.warn('Could not save fallback user profile to Firestore:', dbErr);
-      }
-    } finally {
-      setIsBypassSubmitting(false);
-    }
-  };
-
-  const handleEmployeeQuickLogin = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const email = quickLoginEmail.trim().toLowerCase();
-    if (!email) {
-      setLoginError('กรุณากรอกอีเมลของคุณ');
-      return;
-    }
-    if (!email.includes('@') || !email.includes('.')) {
-      setLoginError('รูปแบบอีเมลไม่ถูกต้อง');
-      return;
-    }
-
-    setIsQuickLoggingIn(true);
-    setLoginError(null);
-
-    try {
-      // Query users collection for this email
-      const q = query(collection(db, 'users'), where('email', '==', email));
-      const qSnap = await getDocs(q);
-
-      if (!qSnap.empty) {
-        const docSnap = qSnap.docs[0];
-        const foundProfile = docSnap.data() as UserAccount;
-        
-        const customUser = {
-          uid: docSnap.id,
-          email: foundProfile.email,
-          displayName: foundProfile.displayName,
-          photoURL: null
-        } as unknown as FirebaseUser;
-
-        // Save session
-        localStorage.setItem('anonymous_user_session', JSON.stringify({ email: foundProfile.email }));
-
-        setUser(customUser);
-        setUserProfile(foundProfile);
-        setToken('');
-        setNeedsAuth(false);
-        setQuickLoginEmail('');
-      } else {
-        setLoginError(`ขออภัย อีเมล "${email}" ยังไม่ได้ลงทะเบียนในระบบจัดการบัญชีพนักงาน กรุณาติดต่อผู้ดูแลระบบ (Admin) เพื่อเพิ่มบัญชีใช้งานของคุณก่อน`);
-      }
-    } catch (err: any) {
-      console.error('Quick login error:', err);
-      setLoginError('เกิดข้อผิดพลาดในการตรวจสอบฐานข้อมูล: ' + (err?.message || String(err)));
-    } finally {
-      setIsQuickLoggingIn(false);
     }
   };
 
@@ -1349,17 +1205,14 @@ export default function App() {
             </div>
           </div>
 
-          {/* Login Fields */}
+          {/* Login Fields - Google / Gmail Only */}
           <div className="space-y-4">
             {loginError && (
               <div className="bg-rose-500/15 border border-rose-500/30 text-rose-200 p-4 rounded-2xl flex items-start gap-3 text-xs leading-relaxed animate-fade-in" id="login-error-banner">
                 <AlertCircle className="h-5 w-5 text-rose-400 shrink-0 mt-0.5" />
                 <div className="space-y-1.5">
-                  <span className="font-bold block text-rose-300 text-sm">เข้าสู่ระบบไม่สำเร็จ</span>
-                  <span className="block">{loginError}</span>
-                  <div className="pt-1.5 border-t border-rose-500/20 text-[10px] text-slate-400">
-                    💡 <strong className="text-white">คำแนะนำ:</strong> หากใช้งานภายในกรอบ iFrame พรีวิว ให้ลองคลิกเปิดใช้งานในแท็บใหม่ด้วยปุ่ม <strong className="text-white">"Open in new tab"</strong> หรือ <strong className="text-white">"Share"</strong> ที่มุมขวาบน เพื่อล็อกอินแบบเต็มหน้าจอและเปิดให้เบราว์เซอร์เปิดหน้าต่างสิทธิ์ยืนยันตัวตน Google Account ของคุณ
-                  </div>
+                  <span className="font-bold block text-rose-300 text-sm">ข้อความแจ้งเตือนระบบ</span>
+                  <span className="block whitespace-pre-line">{loginError}</span>
                 </div>
               </div>
             )}
@@ -1379,15 +1232,34 @@ export default function App() {
                 <span>{isLoggingIn ? 'กำลังเข้าสู่ระบบ...' : 'เข้าสู่ระบบด้วย Google / Gmail'}</span>
               </button>
 
+              {/* Info Card */}
               <div className="bg-indigo-950/40 border border-indigo-500/20 rounded-2xl p-4 text-xs text-indigo-200 space-y-2">
                 <p className="font-bold text-indigo-300 flex items-center space-x-1.5">
                   <ShieldCheck className="h-4 w-4 text-indigo-400 shrink-0" />
-                  <span>ระบบบังคับใช้ Google / Gmail Authentication</span>
+                  <span>ระบบรองรับการเข้าใช้งานด้วย Google / Gmail เท่านั้น</span>
                 </p>
                 <ul className="list-disc pl-4 space-y-1 text-[11px] text-slate-300">
-                  <li>ระบบบังคับล็อกอินผ่านบัญชี Google / Gmail เพื่อความปลอดภัยของข้อมูล</li>
-                  <li>เมื่อล็อกอินสำเร็จ ระบบจะบันทึกโปรไฟล์ของคุณเข้าสู่หน้า <strong className="text-white">"จัดการพนักงาน"</strong> เพื่อให้เป็นสมาชิกของระบบโดยอัตโนมัติ</li>
+                  <li>ผู้ใช้งานทุกคนสามารถเข้าสู่ระบบด้วยบัญชี <strong className="text-white">Google / Gmail</strong> ได้ทันที เพื่อความปลอดภัยและความถูกต้องของข้อมูลพนักงาน</li>
+                  <li>เมื่อเข้าสู่ระบบครั้งแรก ระบบจะบันทึกโปรไฟล์ของคุณเข้าสู่หน้า <strong className="text-white">"จัดการพนักงาน"</strong> และเปิดให้เข้าถึงแดชบอร์ดจองห้องประชุมโดยอัตโนมัติ</li>
                 </ul>
+              </div>
+
+              {/* Helpful Explanation of Error 403 access_denied */}
+              <div className="bg-amber-950/40 border border-amber-500/30 rounded-2xl p-4 text-xs text-amber-200 space-y-2">
+                <p className="font-bold text-amber-300 flex items-center space-x-1.5">
+                  <Info className="h-4 w-4 text-amber-400 shrink-0" />
+                  <span>คำแนะนำกรณีพบข้อผิดพลาด 403: access_denied</span>
+                </p>
+                <p className="text-[11px] text-slate-300 leading-relaxed">
+                  หากกดล็อกอินด้วย Google แล้วพบข้อความ <strong className="text-amber-200">"การเข้าถึงถูกบล็อก... ข้อผิดพลาด 403: access_denied"</strong> แสดงว่าสถานะ OAuth Consent Screen ใน Google Cloud Platform อยู่ในโหมด <strong>Testing (ทดสอบ)</strong> และอีเมลของคุณยังไม่อยู่ในรายชื่อผู้ทดสอบ
+                </p>
+                <div className="bg-slate-900/60 p-2.5 rounded-xl border border-amber-500/20 text-[11px] text-slate-300 space-y-1">
+                  <div className="font-semibold text-amber-300">วิธีแก้ไขสำหรับผู้ดูแลระบบ (itsupport@ec.co.th):</div>
+                  <ul className="list-disc pl-4 space-y-1">
+                    <li>เข้าไปที่ <strong className="text-white">Google Cloud Console &gt; APIs &amp; Services &gt; OAuth consent screen</strong></li>
+                    <li>เพิ่มอีเมลพนักงานทุกคนลงในส่วน <strong className="text-white">Test users</strong> หรือกดปุ่ม <strong className="text-white">Publish App (In Production)</strong> เพื่อให้ทุกคนสามารถล็อกอินได้ทันทีโดยไม่ติดขัด</li>
+                  </ul>
+                </div>
               </div>
             </div>
           </div>

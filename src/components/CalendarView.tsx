@@ -38,7 +38,21 @@ export default function CalendarView({
 }: CalendarViewProps) {
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
-  const [selectedRoomFilter, setSelectedRoomFilter] = useState<RoomId | 'all'>('all');
+  const [selectedRoomFilter, setSelectedRoomFilter] = useState<RoomId | 'all' | 'none'>('all');
+
+  const getRoomColor = (roomId?: RoomId) => {
+    if (roomId === 'room1') return 'bg-emerald-500';
+    if (roomId === 'room2') return 'bg-indigo-500';
+    if (roomId === 'room3') return 'bg-amber-500';
+    return 'bg-slate-400';
+  };
+
+  const getRoomTextColor = (roomId?: RoomId) => {
+    if (roomId === 'room1') return 'text-emerald-700 bg-emerald-50 border-emerald-100';
+    if (roomId === 'room2') return 'text-indigo-700 bg-indigo-50 border-indigo-100';
+    if (roomId === 'room3') return 'text-amber-700 bg-amber-50 border-amber-100';
+    return 'text-slate-700 bg-slate-100 border-slate-200';
+  };
 
   const year = currentDate.getFullYear();
   const month = currentDate.getMonth();
@@ -99,26 +113,24 @@ export default function CalendarView({
   const getBookingsForDay = (date: Date) => {
     const dateStr = getISODateStr(date);
     return bookings.filter(b => {
-      const bDateStr = b.startTime.split('T')[0];
-      const matchRoom = selectedRoomFilter === 'all' || b.roomId === selectedRoomFilter;
-      return bDateStr === dateStr && matchRoom && b.status !== 'rejected';
+      const bStartDate = b.startTime.split('T')[0];
+      const bEndDate = b.endTime ? b.endTime.split('T')[0] : bStartDate;
+      
+      let matchRoom = false;
+      if (selectedRoomFilter === 'all') {
+        matchRoom = true;
+      } else if (selectedRoomFilter === 'none') {
+        matchRoom = !b.roomId;
+      } else {
+        matchRoom = b.roomId === selectedRoomFilter;
+      }
+
+      return dateStr >= bStartDate && dateStr <= bEndDate && matchRoom && b.status !== 'rejected';
     });
   };
 
   // Filtered bookings to show on the selected day list
   const selectedDayBookings = getBookingsForDay(selectedDate);
-
-  const roomColors: Record<RoomId, string> = {
-    room1: 'bg-emerald-500',
-    room2: 'bg-indigo-500',
-    room3: 'bg-amber-500'
-  };
-
-  const roomTextColors: Record<RoomId, string> = {
-    room1: 'text-emerald-700 bg-emerald-50 border-emerald-100',
-    room2: 'text-indigo-700 bg-indigo-50 border-indigo-100',
-    room3: 'text-amber-700 bg-amber-50 border-amber-100'
-  };
 
   const roomMap = rooms.reduce((acc, r) => {
     acc[r.id] = r.name;
@@ -194,6 +206,16 @@ export default function CalendarView({
                 {r.name.split(' ')[0]}
               </button>
             ))}
+            <button
+              onClick={() => setSelectedRoomFilter('none')}
+              className={`text-[11px] font-bold px-2.5 py-1 rounded-md border transition-all ${
+                selectedRoomFilter === 'none'
+                ? 'bg-slate-700 text-white border-slate-700'
+                : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+              }`}
+            >
+              ไม่ระบุห้อง / ออนไลน์
+            </button>
           </div>
         </div>
 
@@ -245,7 +267,7 @@ export default function CalendarView({
                       title={`${b.title} (${b.roomName})`}
                       className={`h-1.5 w-1.5 rounded-full ${
                         b.status === 'approved' 
-                        ? roomColors[b.roomId] 
+                        ? getRoomColor(b.roomId) 
                         : 'bg-amber-400 animate-pulse'
                       }`} 
                     />
@@ -298,8 +320,8 @@ export default function CalendarView({
                     >
                       {/* Top Header Row */}
                       <div className="flex justify-between items-start gap-2">
-                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md border ${roomTextColors[b.roomId]}`}>
-                          {b.roomName.split(' (')[0]}
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md border ${getRoomTextColor(b.roomId)}`}>
+                          {b.roomName ? b.roomName.split(' (')[0] : 'ประชุมออนไลน์'}
                         </span>
                         
                         <div className="flex items-center space-x-1">

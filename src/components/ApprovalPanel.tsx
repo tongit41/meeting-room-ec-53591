@@ -65,6 +65,7 @@ export default function ApprovalPanel({
   };
 
   const roomColors: Record<RoomId, string> = {
+    '': 'bg-slate-100 text-slate-700 border-slate-200',
     room1: 'bg-emerald-50 text-emerald-700 border-emerald-100',
     room2: 'bg-indigo-50 text-indigo-700 border-indigo-100',
     room3: 'bg-amber-50 text-amber-700 border-amber-100'
@@ -115,8 +116,8 @@ export default function ApprovalPanel({
                     {/* Header Row */}
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pb-3 border-b border-slate-100">
                       <div className="flex flex-wrap items-center gap-2">
-                        <span className={`text-[10px] font-bold px-2.5 py-1 rounded-md border ${roomColors[b.roomId]}`}>
-                          {b.roomName}
+                        <span className={`text-[10px] font-bold px-2.5 py-1 rounded-md border ${roomColors[b.roomId] || 'bg-slate-100 text-slate-700 border-slate-200'}`}>
+                          {b.roomName || 'ไม่ระบุห้องประชุม'}
                         </span>
                         <span className="flex items-center text-[10px] font-bold bg-slate-100 text-slate-600 px-2 py-1 rounded border border-slate-200/50">
                           <Calendar className="h-3.5 w-3.5 mr-1" />
@@ -273,7 +274,7 @@ export default function ApprovalPanel({
                       </div>
                       
                       <div className="text-slate-400 font-mono">
-                        ห้อง: {b.roomName.split(' (')[0]}
+                        ห้อง: {b.roomName ? b.roomName.split(' (')[0] : 'ไม่ระบุห้องประชุม'}
                       </div>
                       <div className="text-slate-500">
                         ผู้จอง: <strong className="text-slate-700">{b.creatorName}</strong>

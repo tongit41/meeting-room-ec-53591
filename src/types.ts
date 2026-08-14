@@ -7,10 +7,12 @@ export interface UserAccount {
   nickname: string;
   role: UserRole;
   createdAt?: any;
+  lastLoginAt?: string;
+  photoURL?: string;
   googleAccessToken?: string;
 }
 
-export type RoomId = 'room1' | 'room2' | 'room3';
+export type RoomId = 'room1' | 'room2' | 'room3' | '';
 
 export interface MeetingRoom {
   id: RoomId;

@@ -13,7 +13,9 @@ import {
   Heart,
   Save,
   ShieldAlert,
-  Check
+  Check,
+  Clock,
+  LogIn
 } from 'lucide-react';
 import { UserAccount, UserRole } from '../types';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
@@ -273,29 +275,68 @@ export default function UserManagement({ currentUserEmail, isAdmin }: UserManage
             <table className="w-full text-left border-collapse text-xs">
               <thead>
                 <tr className="border-b border-slate-100 text-slate-400 uppercase tracking-wider font-semibold">
-                  <th className="py-3 px-3">ชื่อ-นามสกุล / ชื่อเล่น</th>
+                  <th className="py-3 px-3">พนักงาน</th>
                   <th className="py-3 px-3">อีเมลติดต่อ</th>
                   <th className="py-3 px-3">สิทธิ์การใช้งาน</th>
+                  <th className="py-3 px-3">เข้าสู่ระบบล่าสุด</th>
                   {isAdmin && <th className="py-3 px-3 text-right">เครื่องมือ</th>}
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-50">
                 {loading ? (
                   <tr>
-                    <td colSpan={4} className="text-center py-6 text-slate-400">กำลังดาวน์โหลดข้อมูลพนักงาน...</td>
+                    <td colSpan={isAdmin ? 5 : 4} className="text-center py-6 text-slate-400">กำลังดาวน์โหลดข้อมูลพนักงาน...</td>
                   </tr>
                 ) : filteredUsers.length > 0 ? (
                   filteredUsers.map(u => {
                     const isSelf = u.email === currentUserEmail;
+                    const formattedLastLogin = u.lastLoginAt ? (() => {
+                      try {
+                        const d = new Date(u.lastLoginAt);
+                        if (isNaN(d.getTime())) return 'ยังไม่เคยเข้าใช้';
+                        return d.toLocaleString('th-TH', {
+                          day: 'numeric',
+                          month: 'short',
+                          year: 'numeric',
+                          hour: '2-digit',
+                          minute: '2-digit'
+                        }) + ' น.';
+                      } catch {
+                        return 'ยังไม่เคยเข้าใช้';
+                      }
+                    })() : 'ยังไม่เคยเข้าใช้';
+
                     return (
                       <tr key={u.id} className="hover:bg-slate-50/50 transition-colors">
                         <td className="py-3.5 px-3">
-                          <div className="font-bold text-slate-800">{u.displayName}</div>
-                          <div className="text-[10px] text-slate-400 mt-0.5">
-                            ชื่อเล่น: <strong className="text-indigo-600 font-bold bg-indigo-50 px-1 py-0.25 rounded">{u.nickname || '-'}</strong>
+                          <div className="flex items-center space-x-2.5">
+                            {u.photoURL ? (
+                              <img 
+                                src={u.photoURL} 
+                                alt={u.displayName} 
+                                className="w-7 h-7 rounded-full object-cover border border-slate-200 shrink-0"
+                                referrerPolicy="no-referrer"
+                              />
+                            ) : (
+                              <div className="w-7 h-7 rounded-full bg-indigo-100 text-indigo-700 font-bold flex items-center justify-center text-[11px] shrink-0 border border-indigo-200/60">
+                                {u.displayName.charAt(0).toUpperCase()}
+                              </div>
+                            )}
+                            <div>
+                              <div className="font-bold text-slate-800">{u.displayName}</div>
+                              <div className="text-[10px] text-slate-400">
+                                ชื่อเล่น: <strong className="text-indigo-600 font-bold bg-indigo-50 px-1 py-0.25 rounded">{u.nickname || '-'}</strong>
+                              </div>
+                            </div>
                           </div>
                         </td>
-                        <td className="py-3.5 px-3 font-mono text-slate-500">{u.email}</td>
+                        <td className="py-3.5 px-3">
+                          <div className="font-mono text-slate-600 font-medium">{u.email}</div>
+                          <div className="text-[10px] text-emerald-600 font-semibold flex items-center gap-1 mt-0.5">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                            <span>Google / Gmail Auth</span>
+                          </div>
+                        </td>
                         <td className="py-3.5 px-3">
                           <span className={`inline-flex items-center px-2 py-0.5 rounded-md font-bold text-[10px] border ${
                             u.role === 'admin' 
@@ -310,12 +351,18 @@ export default function UserManagement({ currentUserEmail, isAdmin }: UserManage
                             </span>
                           )}
                         </td>
+                        <td className="py-3.5 px-3">
+                          <div className="text-slate-600 flex items-center gap-1 font-medium text-[11px]">
+                            <Clock className="h-3 w-3 text-slate-400 shrink-0" />
+                            <span>{formattedLastLogin}</span>
+                          </div>
+                        </td>
                         {isAdmin && (
                           <td className="py-3.5 px-3 text-right">
                             <div className="flex items-center justify-end space-x-1">
                               <button
                                 onClick={() => handleEditClick(u)}
-                                className="p-1 text-indigo-600 hover:bg-indigo-50 rounded"
+                                className="p-1 text-indigo-600 hover:bg-indigo-50 rounded cursor-pointer"
                                 title="แก้ไขพนักงาน"
                               >
                                 <Edit3 className="h-3.5 w-3.5" />
@@ -332,7 +379,7 @@ export default function UserManagement({ currentUserEmail, isAdmin }: UserManage
                                   });
                                 }}
                                 disabled={isSelf}
-                                className={`p-1 text-rose-600 hover:bg-rose-50 rounded ${isSelf ? 'opacity-30 cursor-not-allowed' : ''}`}
+                                className={`p-1 text-rose-600 hover:bg-rose-50 rounded cursor-pointer ${isSelf ? 'opacity-30 cursor-not-allowed' : ''}`}
                                 title="ลบออกจากระบบ"
                               >
                                 <Trash2 className="h-3.5 w-3.5" />
@@ -345,7 +392,7 @@ export default function UserManagement({ currentUserEmail, isAdmin }: UserManage
                   })
                 ) : (
                   <tr>
-                    <td colSpan={4} className="text-center py-8 text-slate-400">ไม่พบรายชื่อพนักงานที่ระบุ</td>
+                    <td colSpan={isAdmin ? 5 : 4} className="text-center py-8 text-slate-400">ไม่พบรายชื่อพนักงานที่ระบุ</td>
                   </tr>
                 )}
               </tbody>
