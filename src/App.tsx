@@ -1243,24 +1243,6 @@ export default function App() {
                   <li>เมื่อเข้าสู่ระบบครั้งแรก ระบบจะบันทึกโปรไฟล์ของคุณเข้าสู่หน้า <strong className="text-white">"จัดการพนักงาน"</strong> และเปิดให้เข้าถึงแดชบอร์ดจองห้องประชุมโดยอัตโนมัติ</li>
                 </ul>
               </div>
-
-              {/* Helpful Explanation of Error 403 access_denied */}
-              <div className="bg-amber-950/40 border border-amber-500/30 rounded-2xl p-4 text-xs text-amber-200 space-y-2">
-                <p className="font-bold text-amber-300 flex items-center space-x-1.5">
-                  <Info className="h-4 w-4 text-amber-400 shrink-0" />
-                  <span>คำแนะนำกรณีพบข้อผิดพลาด 403: access_denied</span>
-                </p>
-                <p className="text-[11px] text-slate-300 leading-relaxed">
-                  หากกดล็อกอินด้วย Google แล้วพบข้อความ <strong className="text-amber-200">"การเข้าถึงถูกบล็อก... ข้อผิดพลาด 403: access_denied"</strong> แสดงว่าสถานะ OAuth Consent Screen ใน Google Cloud Platform อยู่ในโหมด <strong>Testing (ทดสอบ)</strong> และอีเมลของคุณยังไม่อยู่ในรายชื่อผู้ทดสอบ
-                </p>
-                <div className="bg-slate-900/60 p-2.5 rounded-xl border border-amber-500/20 text-[11px] text-slate-300 space-y-1">
-                  <div className="font-semibold text-amber-300">วิธีแก้ไขสำหรับผู้ดูแลระบบ (itsupport@ec.co.th):</div>
-                  <ul className="list-disc pl-4 space-y-1">
-                    <li>เข้าไปที่ <strong className="text-white">Google Cloud Console &gt; APIs &amp; Services &gt; OAuth consent screen</strong></li>
-                    <li>เพิ่มอีเมลพนักงานทุกคนลงในส่วน <strong className="text-white">Test users</strong> หรือกดปุ่ม <strong className="text-white">Publish App (In Production)</strong> เพื่อให้ทุกคนสามารถล็อกอินได้ทันทีโดยไม่ติดขัด</li>
-                  </ul>
-                </div>
-              </div>
             </div>
           </div>
 
