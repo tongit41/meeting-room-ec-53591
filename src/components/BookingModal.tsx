@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { 
-  X, 
+  X,
+  Lock, 
   MapPin, 
   Calendar, 
   Clock, 
@@ -12,11 +13,20 @@ import {
   CheckCircle,
   HelpCircle,
   Link,
-  Plus
+  Plus,
+  Star
 } from 'lucide-react';
 import { Booking, RoomId, MeetingRoom, MeetingPlatform, UserAccount } from '../types';
 import { MEETING_ROOMS, db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { collection, getDocs } from 'firebase/firestore';
+import { isKeyAttendee, sortAttendeesByPriority } from '../lib/permissions';
+
+export interface AttendeeItem {
+  id?: string;
+  email: string;
+  displayName: string;
+  nickname?: string;
+}
 
 interface BookingModalProps {
   isOpen: boolean;
@@ -57,11 +67,12 @@ export default function BookingModal({
   const [meetingPlatform, setMeetingPlatform] = useState<MeetingPlatform>('meet');
   const [customLink, setCustomLink] = useState('');
   const [availableUsers, setAvailableUsers] = useState<UserAccount[]>([]);
-  const [selectedAttendees, setSelectedAttendees] = useState<UserAccount[]>([]);
+  const [selectedAttendees, setSelectedAttendees] = useState<AttendeeItem[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [loadingUsers, setLoadingUsers] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+  const [isConfidential, setIsConfidential] = useState(false);
 
   const DAYS_OF_WEEK = [
     { id: 1, label: 'จ.', fullName: 'จันทร์' },
@@ -114,6 +125,7 @@ export default function BookingModal({
         setMeetingPlatform(editingBooking.meetingType || 'meet');
         setCustomLink(editingBooking.meetingLink || '');
         setSelectedAttendees(editingBooking.attendees || []);
+        setIsConfidential(Boolean(editingBooking.isConfidential));
         setErrorMsg('');
       } else {
         setTitle('');
@@ -132,6 +144,7 @@ export default function BookingModal({
         setMeetingPlatform('meet');
         setCustomLink('');
         setSelectedAttendees([]);
+        setIsConfidential(false);
         setErrorMsg('');
       }
       
@@ -154,15 +167,13 @@ export default function BookingModal({
       qSnap.forEach(d => {
         list.push(d.data() as UserAccount);
       });
-      setAvailableUsers(list);
+      setAvailableUsers(sortAttendeesByPriority(list));
     } catch (error) {
       console.error('Error fetching users for attendees list:', error);
     } finally {
       setLoadingUsers(false);
     }
   };
-
-  if (!isOpen) return null;
 
   // Generate standard 30-min time slots
   const generateTimeSlots = () => {
@@ -177,12 +188,70 @@ export default function BookingModal({
 
   const timeSlots = generateTimeSlots();
 
-  const toggleAttendee = (user: UserAccount) => {
+  // Helper to check if an attendee is in a conflicting meeting
+  const getUserConflictBooking = (userEmail: string): Booking | null => {
+    if (!userEmail || !startDate || !endDate || !startTime || !endTime) return null;
+    const targetEmail = userEmail.toLowerCase().trim();
+    const validDates = calculateMatchingDates();
+    if (validDates.length === 0) return null;
+
+    for (const b of (bookings || [])) {
+      if (editingBooking && b.id === editingBooking.id) continue;
+      if (b.status === 'rejected') continue;
+
+      // Check if user is attendee or creator of this existing booking
+      const isUserInBooking = 
+        (b.creatorEmail && b.creatorEmail.toLowerCase().trim() === targetEmail) ||
+        (b.attendees && b.attendees.some(a => (a.email || '').toLowerCase().trim() === targetEmail));
+
+      if (!isUserInBooking) continue;
+
+      // Check time overlap
+      if (dateMode === 'range') {
+        const startISO = `${startDate}T${startTime}`;
+        const endISO = `${endDate}T${endTime}`;
+        if (b.startTime < endISO && startISO < b.endTime) {
+          return b;
+        }
+      } else {
+        // Specific days
+        for (const d of validDates) {
+          const startISO = `${d}T${startTime}`;
+          const endISO = `${d}T${endTime}`;
+          if (b.startTime < endISO && startISO < b.endTime) {
+            return b;
+          }
+        }
+      }
+    }
+    return null;
+  };
+
+  // Auto-remove any attendees that conflict if time/date is adjusted
+  useEffect(() => {
+    if (!isOpen) return;
+    if (selectedAttendees.length > 0) {
+      const valid = selectedAttendees.filter(att => !getUserConflictBooking(att.email));
+      if (valid.length !== selectedAttendees.length) {
+        setSelectedAttendees(valid);
+      }
+    }
+  }, [isOpen, startDate, endDate, startTime, endTime, dateMode, selectedDays, bookings]);
+
+  const toggleAttendee = (user: AttendeeItem) => {
+    const conflict = getUserConflictBooking(user.email);
+    if (conflict) return;
+
     const exists = selectedAttendees.find(a => a.email === user.email);
     if (exists) {
       setSelectedAttendees(selectedAttendees.filter(a => a.email !== user.email));
     } else {
-      setSelectedAttendees([...selectedAttendees, user]);
+      setSelectedAttendees(sortAttendeesByPriority([...selectedAttendees, {
+        id: user.id || user.email,
+        email: user.email,
+        displayName: user.displayName,
+        nickname: user.nickname
+      }]));
     }
   };
 
@@ -287,6 +356,17 @@ export default function BookingModal({
       }
     }
 
+    // Attendees Overlap Validation
+    for (const att of selectedAttendees) {
+      const conflict = getUserConflictBooking(att.email);
+      if (conflict) {
+        setErrorMsg(
+          `ไม่สามารถบันทึกการจองได้: ผู้เข้าร่วม "${att.displayName}" มีการเข้าร่วมประชุม "${conflict.title}" อยู่แล้วในช่วงเวลาดังกล่าว`
+        );
+        return;
+      }
+    }
+
     setIsSubmitting(true);
     try {
       const selectedRoom = rooms.find(r => r.id === selectedRoomId);
@@ -298,8 +378,8 @@ export default function BookingModal({
         finalLink = editingBooking ? (editingBooking.meetingLink || '') : '';
       }
 
-      // Attendees mapping
-      const mappedAttendees = selectedAttendees.map(a => ({
+      // Attendees mapping sorted by priority
+      const mappedAttendees = sortAttendeesByPriority(selectedAttendees).map(a => ({
         email: a.email,
         displayName: a.displayName,
         nickname: a.nickname
@@ -319,7 +399,8 @@ export default function BookingModal({
           status: editingBooking ? editingBooking.status : (isAdmin ? 'approved' : 'pending'),
           attendees: mappedAttendees,
           meetingType: meetingPlatform,
-          meetingLink: finalLink
+          meetingLink: finalLink,
+          isConfidential
         }, editingBooking?.id);
       } else {
         // Multi-day specific creation/update
@@ -335,7 +416,8 @@ export default function BookingModal({
             status: editingBooking.status,
             attendees: mappedAttendees,
             meetingType: meetingPlatform,
-            meetingLink: finalLink
+            meetingLink: finalLink,
+            isConfidential
           }, editingBooking.id);
 
           for (let i = 1; i < targetDates.length; i++) {
@@ -350,7 +432,8 @@ export default function BookingModal({
               status: isAdmin ? 'approved' : 'pending',
               attendees: mappedAttendees,
               meetingType: meetingPlatform,
-              meetingLink: finalLink
+              meetingLink: finalLink,
+              isConfidential
             });
           }
         } else {
@@ -365,7 +448,8 @@ export default function BookingModal({
               status: isAdmin ? 'approved' : 'pending',
               attendees: mappedAttendees,
               meetingType: meetingPlatform,
-              meetingLink: finalLink
+              meetingLink: finalLink,
+              isConfidential
             });
           }
         }
@@ -380,14 +464,19 @@ export default function BookingModal({
     }
   };
 
-  const filteredUsers = availableUsers.filter(u => {
-    const term = searchTerm.toLowerCase();
-    return (
-      u.displayName.toLowerCase().includes(term) ||
-      u.email.toLowerCase().includes(term) ||
-      (u.nickname && u.nickname.toLowerCase().includes(term))
-    );
-  });
+  const filteredUsers = sortAttendeesByPriority<UserAccount>(
+    availableUsers.filter(u => {
+      const term = searchTerm.toLowerCase().trim();
+      if (!term) return true;
+      return (
+        u.displayName.toLowerCase().includes(term) ||
+        u.email.toLowerCase().includes(term) ||
+        (u.nickname && u.nickname.toLowerCase().includes(term))
+      );
+    })
+  );
+
+  if (!isOpen) return null;
 
   return (
     <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 overflow-y-auto">
@@ -459,6 +548,26 @@ export default function BookingModal({
                 placeholder="ระบุวาระการประชุม และรายละเอียดสำหรับผู้เข้าร่วม (ไม่บังคับ)"
                 className="w-full px-3.5 py-2 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
               />
+            </div>
+
+            {/* Confidential Checkbox */}
+            <div className="bg-amber-50/70 border border-amber-200/80 rounded-xl p-3 flex items-start gap-3">
+              <input 
+                type="checkbox"
+                id="booking-confidential-checkbox"
+                checked={isConfidential}
+                onChange={e => setIsConfidential(e.target.checked)}
+                className="mt-0.5 h-4 w-4 rounded border-amber-300 text-amber-600 focus:ring-amber-500 cursor-pointer"
+              />
+              <label htmlFor="booking-confidential-checkbox" className="text-xs text-slate-700 cursor-pointer select-none">
+                <span className="font-bold flex items-center gap-1 text-amber-900">
+                  <Lock className="h-3.5 w-3.5 text-amber-600" />
+                  <span>ความลับสำคัญ</span>
+                </span>
+                <p className="text-[11px] text-slate-500 mt-0.5">
+                  ซ่อนหัวข้อและรายละเอียดการประชุมนี้จากพนักงานทั่วไป (จะแสดงเป็น "ห้องประชุมไม่ว่าง") โดยเฉพาะผู้ดูแลระบบ, ผู้จอง และผู้ที่ได้รับเชิญเท่านั้นที่จะมองเห็นรายละเอียด
+                </p>
+              </label>
             </div>
           </div>
 
@@ -770,6 +879,36 @@ export default function BookingModal({
               </label>
               <span className="text-[10px] text-slate-400">ดึงชื่อเล่น ชื่อ-นามสกุล และอีเมลอัตโนมัติ</span>
             </div>
+
+            {/* Selected Attendees Badges */}
+            {selectedAttendees.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 p-2 bg-slate-50/80 rounded-xl border border-slate-200/80 max-h-[85px] overflow-y-auto">
+                {sortAttendeesByPriority<AttendeeItem>(selectedAttendees).map(att => {
+                  const isVIP = isKeyAttendee(att.email);
+                  return (
+                    <span 
+                      key={att.id || att.email}
+                      className={`inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-md font-medium shadow-2xs ${
+                        isVIP
+                          ? 'bg-amber-100 text-amber-900 border border-amber-300 font-bold'
+                          : 'bg-white text-slate-700 border border-slate-200'
+                      }`}
+                    >
+                      {isVIP && <Star className="h-2.5 w-2.5 text-amber-600 fill-amber-500 shrink-0" />}
+                      <span>{att.displayName}{att.nickname ? ` (${att.nickname})` : ''}</span>
+                      <button
+                        type="button"
+                        onClick={() => toggleAttendee(att)}
+                        className="text-slate-400 hover:text-rose-600 ml-0.5 text-xs font-bold leading-none cursor-pointer"
+                        title="ลบออก"
+                      >
+                        ×
+                      </button>
+                    </span>
+                  );
+                })}
+              </div>
+            )}
             
             <div className="border border-slate-200 rounded-xl overflow-hidden">
               {/* Search bar inside */}
@@ -784,31 +923,66 @@ export default function BookingModal({
               </div>
 
               {/* Scrolling Users Selection */}
-              <div className="max-h-[140px] overflow-y-auto divide-y divide-slate-100 bg-white">
+              <div className="max-h-[160px] overflow-y-auto divide-y divide-slate-100 bg-white">
                 {loadingUsers ? (
                   <div className="text-center py-4 text-slate-400 text-xs">กำลังโหลดรายชื่อพนักงาน...</div>
                 ) : filteredUsers.length > 0 ? (
                   filteredUsers.map(user => {
                     const isSelected = selectedAttendees.some(a => a.email === user.email);
+                    const conflictBooking = getUserConflictBooking(user.email);
+                    const isVIP = isKeyAttendee(user.email);
+
                     return (
                       <button
                         type="button"
                         key={user.id}
-                        onClick={() => toggleAttendee(user)}
+                        disabled={!!conflictBooking}
+                        onClick={() => !conflictBooking && toggleAttendee(user)}
                         className={`w-full text-left p-2 px-3 flex items-center justify-between text-xs transition-colors ${
-                          isSelected ? 'bg-indigo-50/70 hover:bg-indigo-100/70' : 'hover:bg-slate-50'
+                          conflictBooking
+                            ? 'bg-rose-50/50 cursor-not-allowed opacity-85'
+                            : isSelected 
+                              ? 'bg-indigo-50/70 hover:bg-indigo-100/70 cursor-pointer' 
+                              : isVIP
+                                ? 'bg-amber-50/40 hover:bg-amber-50 cursor-pointer'
+                                : 'hover:bg-slate-50 cursor-pointer'
                         }`}
                       >
-                        <div className="space-y-0.5">
-                          <div className="font-semibold text-slate-800">
-                            {user.displayName} {user.nickname ? `(${user.nickname})` : ''}
+                        <div className="space-y-0.5 min-w-0 pr-2">
+                          <div className="font-semibold text-slate-800 flex items-center gap-1.5 flex-wrap">
+                            <span>{user.displayName} {user.nickname ? `(${user.nickname})` : ''}</span>
+                            {isVIP && (
+                              <span className="inline-flex items-center gap-1 text-[9px] font-bold text-amber-700 bg-amber-100/80 border border-amber-300 px-1.5 py-0.2 rounded-md">
+                                <Star className="h-2.5 w-2.5 text-amber-600 fill-amber-500" />
+                                <span>คนสำคัญ</span>
+                              </span>
+                            )}
                           </div>
-                          <div className="text-[10px] text-slate-400 font-mono">{user.email}</div>
+                          <div className="text-[10px] text-slate-400 font-mono truncate">{user.email}</div>
                         </div>
-                        <div className={`h-4 w-4 rounded border flex items-center justify-center ${
-                          isSelected ? 'border-indigo-600 bg-indigo-600 text-white' : 'border-slate-300'
-                        }`}>
-                          {isSelected && <span className="text-[10px]">✓</span>}
+                        
+                        <div className="flex items-center space-x-2 shrink-0">
+                          {conflictBooking && (
+                            <span 
+                              title={`ติดการประชุม: ${conflictBooking.title}`}
+                              className="text-rose-600 font-semibold text-[11px] text-right truncate max-w-[150px] sm:max-w-[220px]"
+                            >
+                              ติดประชุม: {conflictBooking.title}
+                            </span>
+                          )}
+                          <div className={`h-4 w-4 rounded border flex items-center justify-center shrink-0 ${
+                            conflictBooking 
+                              ? 'border-rose-300 bg-rose-50 text-rose-500'
+                              : isSelected 
+                                ? 'border-indigo-600 bg-indigo-600 text-white' 
+                                : 'border-slate-300'
+                          }`}>
+                            {conflictBooking ? (
+                              <span className="text-[9px] font-bold">✕</span>
+                            ) : isSelected ? (
+                              <span className="text-[10px]">✓</span>
+                            ) : null}
+                          </div>
                         </div>
                       </button>
                     );

@@ -58,7 +58,8 @@ import {
   ShieldCheck,
   LogIn,
   Info,
-  CheckCircle2
+  CheckCircle2,
+  Clock
 } from 'lucide-react';
 
 export default function App() {
@@ -99,6 +100,49 @@ export default function App() {
     title: 'ดำเนินการสำเร็จ'
   });
   const [logoutConfirmOpen, setLogoutConfirmOpen] = useState(false);
+  const [sessionExpiredAlert, setSessionExpiredAlert] = useState(false);
+
+  // 5-minute Inactivity Session Timeout
+  useEffect(() => {
+    if (!user || needsAuth) return;
+
+    let lastActivityTime = Date.now();
+    const INACTIVITY_LIMIT_MS = 5 * 60 * 1000; // 5 minutes
+
+    const resetActivity = () => {
+      lastActivityTime = Date.now();
+    };
+
+    const events = ['mousemove', 'mousedown', 'keydown', 'scroll', 'touchstart', 'click'];
+    events.forEach(event => {
+      window.addEventListener(event, resetActivity, { passive: true });
+    });
+
+    const checkInterval = setInterval(async () => {
+      const now = Date.now();
+      if (now - lastActivityTime >= INACTIVITY_LIMIT_MS) {
+        clearInterval(checkInterval);
+        // Automatically logout due to inactivity
+        setLogoutConfirmOpen(false);
+        setIsBookingOpen(false);
+        setIsImportOpen(false);
+        setSessionExpiredAlert(true);
+        localStorage.removeItem('anonymous_user_session');
+        await googleSignOut();
+        setUser(null);
+        setUserProfile(null);
+        setToken(null);
+        setNeedsAuth(true);
+      }
+    }, 5000);
+
+    return () => {
+      clearInterval(checkInterval);
+      events.forEach(event => {
+        window.removeEventListener(event, resetActivity);
+      });
+    };
+  }, [user, needsAuth]);
 
   // Listeners for Firebase Real-time syncing
   useEffect(() => {
@@ -1577,6 +1621,29 @@ export default function App() {
                 ออกจากระบบ
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Session Expired Inactivity Notice Modal */}
+      {sessionExpiredAlert && (
+        <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fade-in">
+          <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-2xl max-w-sm w-full space-y-4 animate-in scale-in duration-200 text-center">
+            <div className="w-12 h-12 rounded-full bg-amber-50 border border-amber-200 text-amber-600 flex items-center justify-center mx-auto">
+              <Clock className="w-6 h-6" />
+            </div>
+            <div className="space-y-1.5">
+              <h3 className="font-bold text-slate-800 text-base">เซสชันหมดอายุ (Session Timeout)</h3>
+              <p className="text-xs text-slate-500 leading-relaxed">
+                ระบบได้ออกจากระบบอัตโนมัติเนื่องจากไม่มีการเคลื่อนไหวเกิน 5 นาที เพื่อความปลอดภัยของข้อมูล
+              </p>
+            </div>
+            <button
+              onClick={() => setSessionExpiredAlert(false)}
+              className="w-full py-2.5 px-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-indigo-100 cursor-pointer"
+            >
+              รับทราบ / เข้าสู่ระบบใหม่
+            </button>
           </div>
         </div>
       )}

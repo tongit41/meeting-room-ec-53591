@@ -12,10 +12,17 @@ import {
   CheckCircle,
   AlertCircle,
   Trash2,
-  Pencil
+  Pencil,
+  Users
 } from 'lucide-react';
 import { Booking, RoomId, MeetingRoom } from '../types';
 import { MEETING_ROOMS } from '../lib/firebase';
+import { 
+  sortAttendeesByPriority, 
+  isKeyAttendee, 
+  canViewBookingDetails 
+} from '../lib/permissions';
+import { Lock, Star } from 'lucide-react';
 
 interface CalendarViewProps {
   bookings: Booking[];
@@ -203,7 +210,7 @@ export default function CalendarView({
                   : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
                 }`}
               >
-                {r.name.split(' ')[0]}
+                {r.name.includes('(') ? r.name.split('(')[0].trim() : r.name}
               </button>
             ))}
             <button
@@ -247,31 +254,50 @@ export default function CalendarView({
                 onClick={() => setSelectedDate(day)}
                 className={`aspect-square p-2 rounded-xl flex flex-col justify-between text-left transition-all border relative ${
                   isSelected 
-                  ? 'bg-indigo-50 border-indigo-400 ring-2 ring-indigo-400/20' 
+                  ? 'bg-indigo-50 border-indigo-500 ring-2 ring-indigo-400/30' 
                   : isToday 
-                    ? 'bg-slate-950 border-slate-950 text-white shadow' 
+                    ? 'bg-sky-50/70 border-sky-300 ring-1 ring-sky-300/40 hover:bg-sky-100/50' 
                     : 'bg-white border-slate-100 hover:bg-slate-50 hover:border-slate-300'
                 }`}
               >
-                <span className={`text-xs font-bold leading-none ${
-                  isSelected ? 'text-indigo-700' : isToday ? 'text-white' : 'text-slate-700'
-                }`}>
-                  {day.getDate()}
-                </span>
+                <div className="flex items-center justify-between w-full">
+                  <span className={`text-xs font-bold leading-none ${
+                    isSelected 
+                      ? 'text-indigo-700 font-extrabold' 
+                      : isToday 
+                        ? 'text-sky-700 font-bold' 
+                        : 'text-slate-700'
+                  }`}>
+                    {day.getDate()}
+                  </span>
+                  {isToday && (
+                    <span className={`text-[9px] font-semibold px-1 py-0.5 rounded leading-none ${
+                      isSelected 
+                        ? 'bg-indigo-200/80 text-indigo-800' 
+                        : 'bg-sky-200/80 text-sky-800'
+                    }`}>
+                      วันนี้
+                    </span>
+                  )}
+                </div>
 
                 {/* Booking Dots Container */}
                 <div className="flex flex-wrap gap-1 mt-1 max-h-[16px] overflow-hidden">
-                  {dayBookings.slice(0, 3).map((b, bIdx) => (
-                    <span 
-                      key={bIdx}
-                      title={`${b.title} (${b.roomName})`}
-                      className={`h-1.5 w-1.5 rounded-full ${
-                        b.status === 'approved' 
-                        ? getRoomColor(b.roomId) 
-                        : 'bg-amber-400 animate-pulse'
-                      }`} 
-                    />
-                  ))}
+                  {dayBookings.slice(0, 3).map((b, bIdx) => {
+                    const canView = canViewBookingDetails(b, currentUserEmail, isAdmin);
+                    const dotTitle = canView ? `${b.title} (${b.roomName})` : `ห้องประชุมไม่ว่าง (${b.roomName})`;
+                    return (
+                      <span 
+                        key={bIdx}
+                        title={dotTitle}
+                        className={`h-1.5 w-1.5 rounded-full ${
+                          b.status === 'approved' 
+                          ? getRoomColor(b.roomId) 
+                          : 'bg-amber-400 animate-pulse'
+                        }`} 
+                      />
+                    );
+                  })}
                   {dayBookings.length > 3 && (
                     <span className="text-[8px] text-slate-400 leading-none font-bold">
                       +{dayBookings.length - 3}
@@ -306,6 +332,7 @@ export default function CalendarView({
                   const isApproved = b.status === 'approved';
                   const isPending = b.status === 'pending';
                   const isRejected = b.status === 'rejected';
+                  const canView = canViewBookingDetails(b, currentUserEmail, isAdmin);
 
                   return (
                     <div 
@@ -345,10 +372,14 @@ export default function CalendarView({
 
                       {/* Title and details */}
                       <div className="space-y-1">
-                        <h4 className="font-bold text-slate-800 text-sm line-clamp-1">{b.title}</h4>
-                        {b.description && (
+                        <h4 className="font-bold text-slate-800 text-sm line-clamp-1">
+                          {canView ? b.title : 'ห้องประชุมไม่ว่าง'}
+                        </h4>
+                        {canView && b.description ? (
                           <p className="text-xs text-slate-500 line-clamp-2">{b.description}</p>
-                        )}
+                        ) : !canView ? (
+                          <p className="text-xs text-slate-400 italic">การประชุมนี้ถูกระบุเป็นความลับสำคัญ ซ่อนรายละเอียดและลิงก์สำหรับผู้ไม่มีส่วนเกี่ยวข้อง</p>
+                        ) : null}
                       </div>
 
                       {/* Time and Organizer */}
@@ -360,13 +391,49 @@ export default function CalendarView({
                           </span>
                         </div>
                         <div className="font-medium text-slate-700">
-                          {b.creatorName}
+                          {canView ? b.creatorName : 'ผู้จองภายใน'}
                         </div>
                       </div>
 
+                      {/* Attendees List sorted by Priority & VIP highlighted */}
+                      {canView && b.attendees && b.attendees.length > 0 && (
+                        <div className="pt-2 border-t border-slate-100/60 space-y-1.5">
+                          <div className="flex items-center justify-between text-[11px] font-bold text-slate-600">
+                            <div className="flex items-center space-x-1.5">
+                              <Users className="h-3.5 w-3.5 text-indigo-500 shrink-0" />
+                              <span>ผู้เข้าร่วมประชุม:</span>
+                            </div>
+                            <span className="text-[10px] font-semibold text-slate-400">
+                              {b.attendees.length} ท่าน
+                            </span>
+                          </div>
+                          <div className="flex flex-wrap gap-1.5 max-h-[110px] overflow-y-auto pr-0.5">
+                            {sortAttendeesByPriority(b.attendees).map((att, attIdx) => {
+                              const isVIP = isKeyAttendee(att.email);
+                              return (
+                                <span 
+                                  key={attIdx} 
+                                  title={att.email}
+                                  className={`inline-flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-md transition-colors ${
+                                    isVIP
+                                      ? 'bg-amber-100/90 text-amber-900 border border-amber-300 font-bold shadow-xs'
+                                      : 'bg-slate-100/90 hover:bg-indigo-50 hover:text-indigo-800 text-slate-700 border border-slate-200/80'
+                                  }`}
+                                >
+                                  {isVIP && (
+                                    <Star className="h-2.5 w-2.5 text-amber-600 fill-amber-500 shrink-0" />
+                                  )}
+                                  <span>{att.displayName}{att.nickname ? ` (${att.nickname})` : ''}</span>
+                                </span>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+
                       {/* Action Links */}
                       <div className="flex gap-2 pt-2">
-                        {b.meetingLink && isApproved && (
+                        {canView && b.meetingLink && isApproved && (
                           <a 
                             href={b.meetingLink}
                             target="_blank"
@@ -394,7 +461,7 @@ export default function CalendarView({
                             title="ลบกิจกรรมการใช้ห้องประชุม"
                           >
                             <Trash2 className="h-3.5 w-3.5" />
-                            {(!b.meetingLink || !isApproved) && <span>ลบกิจกรรม</span>}
+                            {(!b.meetingLink || !isApproved || !canView) && <span>ลบกิจกรรม</span>}
                           </button>
                         )}
                       </div>

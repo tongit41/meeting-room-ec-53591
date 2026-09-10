@@ -15,10 +15,13 @@ import {
   Video,
   Trash2,
   FileUp,
-  Pencil
+  Pencil,
+  Lock,
+  Star
 } from 'lucide-react';
 import { Booking, MeetingRoom, RoomId } from '../types';
 import { MEETING_ROOMS } from '../lib/firebase';
+import { canViewBookingDetails, isKeyAttendee, sortAttendeesByPriority } from '../lib/permissions';
 
 interface DashboardProps {
   bookings: Booking[];
@@ -165,17 +168,7 @@ export default function Dashboard({
       </div>
 
       {/* Stats Counters */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center justify-between">
-          <div className="space-y-1">
-            <span className="text-xs text-slate-500 font-medium block">ห้องประชุมทั้งหมด</span>
-            <span className="text-2xl font-bold text-slate-800">3 ห้อง</span>
-          </div>
-          <div className="h-12 w-12 bg-slate-50 text-slate-600 rounded-lg flex items-center justify-center border border-slate-200">
-            <MapPin className="h-6 w-6" />
-          </div>
-        </div>
-
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center justify-between">
           <div className="space-y-1">
             <span className="text-xs text-slate-500 font-medium block">จองสำเร็จวันนี้</span>
@@ -199,11 +192,11 @@ export default function Dashboard({
         <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center justify-between">
           <div className="space-y-1">
             <span className="text-xs text-slate-500 font-medium block">สิทธิ์การใช้งานของคุณ</span>
-            <span className="text-md font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-md border border-indigo-100 inline-block">
-              {isAdmin ? 'ผู้ดูแลระบบ (Admin)' : 'พนักงานทั่วไป (Employee)'}
+            <span className="text-md font-bold text-slate-700 block">
+              {isAdmin ? 'ผู้ดูแลระบบ (Admin)' : 'ผู้ใช้งาน'}
             </span>
           </div>
-          <div className="h-12 w-12 bg-indigo-50 text-indigo-600 rounded-lg flex items-center justify-center border border-indigo-200">
+          <div className="h-12 w-12 bg-slate-50 text-slate-600 rounded-lg flex items-center justify-center border border-slate-200">
             <Users className="h-6 w-6" />
           </div>
         </div>
@@ -268,75 +261,128 @@ export default function Dashboard({
 
                 {/* Card Body - Current or Next Info */}
                 <div className="p-5 flex-1 flex flex-col justify-between space-y-4">
-                  {isOccupied && roomInfo.booking && (
-                    <div className="space-y-2.5">
-                      <div className="text-[11px] font-bold text-rose-500 uppercase tracking-wider">กำลังใช้งานในขณะนี้</div>
-                      <div className="bg-rose-50/50 p-3.5 rounded-xl border border-rose-100 space-y-2">
-                        <h4 className="font-semibold text-slate-800 text-sm line-clamp-1">{roomInfo.booking.title}</h4>
-                        <p className="text-xs text-slate-500 font-mono flex items-center space-x-1.5">
-                          <Clock className="h-3.5 w-3.5 shrink-0" />
-                          <span>
-                            {new Date(roomInfo.booking.startTime).toLocaleTimeString('th-TH', {hour: '2-digit', minute: '2-digit'})} - {new Date(roomInfo.booking.endTime).toLocaleTimeString('th-TH', {hour: '2-digit', minute: '2-digit'})}
-                          </span>
-                        </p>
-                        <div className="flex items-center justify-between text-[11px] pt-1 border-t border-rose-100/60">
-                          <span className="text-slate-500">ผู้จอง: <strong className="text-slate-700">{roomInfo.booking.creatorName}</strong></span>
-                          {roomInfo.booking.meetingLink && (
-                            <a 
-                              href={roomInfo.booking.meetingLink} 
-                              target="_blank" 
-                              rel="noreferrer"
-                              className="text-indigo-600 hover:underline font-semibold flex items-center space-x-1"
-                            >
-                              <Video className="h-3 w-3" />
-                              <span>เข้าสายด่วน</span>
-                            </a>
+                  {isOccupied && roomInfo.booking && (() => {
+                    const canView = canViewBookingDetails(roomInfo.booking, currentUserEmail, isAdmin);
+                    return (
+                      <div className="space-y-2.5">
+                        <div className="text-[11px] font-bold text-rose-500 uppercase tracking-wider flex items-center justify-between">
+                          <span>กำลังใช้งานในขณะนี้</span>
+                          {roomInfo.booking.isConfidential && (
+                            <span className="flex items-center space-x-1 text-[10px] text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
+                              <Lock className="h-3 w-3" />
+                              <span>ความลับสำคัญ</span>
+                            </span>
+                          )}
+                        </div>
+                        <div className="bg-rose-50/50 p-3.5 rounded-xl border border-rose-100 space-y-2">
+                          <h4 className="font-semibold text-slate-800 text-sm line-clamp-1">
+                            {canView ? roomInfo.booking.title : 'ห้องประชุมไม่ว่าง'}
+                          </h4>
+                          <p className="text-xs text-slate-500 font-mono flex items-center space-x-1.5">
+                            <Clock className="h-3.5 w-3.5 shrink-0" />
+                            <span>
+                              {new Date(roomInfo.booking.startTime).toLocaleTimeString('th-TH', {hour: '2-digit', minute: '2-digit'})} - {new Date(roomInfo.booking.endTime).toLocaleTimeString('th-TH', {hour: '2-digit', minute: '2-digit'})}
+                            </span>
+                          </p>
+                          {canView ? (
+                            <div className="flex items-center justify-between text-[11px] pt-1 border-t border-rose-100/60">
+                              <span className="text-slate-500">ผู้จอง: <strong className="text-slate-700">{roomInfo.booking.creatorName}</strong></span>
+                              {roomInfo.booking.meetingLink && (
+                                <a 
+                                  href={roomInfo.booking.meetingLink} 
+                                  target="_blank" 
+                                  rel="noreferrer"
+                                  className="text-indigo-600 hover:underline font-semibold flex items-center space-x-1"
+                                >
+                                  <Video className="h-3 w-3" />
+                                  <span>เข้าสายด่วน</span>
+                                </a>
+                              )}
+                            </div>
+                          ) : (
+                            <div className="text-[11px] pt-1 border-t border-rose-100/60 text-slate-400 italic">
+                              ซ่อนรายละเอียดการประชุม (ความลับสำคัญ)
+                            </div>
                           )}
                         </div>
                       </div>
-                    </div>
-                  )}
+                    );
+                  })()}
 
-                  {isPending && roomInfo.booking && (
-                    <div className="space-y-2.5">
-                      <div className="text-[11px] font-bold text-amber-500 uppercase tracking-wider">อยู่ระหว่างการรออนุมัติ</div>
-                      <div className="bg-amber-50/50 p-3.5 rounded-xl border border-amber-100 space-y-2">
-                        <h4 className="font-semibold text-slate-800 text-sm line-clamp-1">{roomInfo.booking.title}</h4>
-                        <p className="text-xs text-slate-500 font-mono flex items-center space-x-1.5">
-                          <Clock className="h-3.5 w-3.5" />
-                          <span>
-                            {new Date(roomInfo.booking.startTime).toLocaleTimeString('th-TH', {hour: '2-digit', minute: '2-digit'})} - {new Date(roomInfo.booking.endTime).toLocaleTimeString('th-TH', {hour: '2-digit', minute: '2-digit'})}
-                          </span>
-                        </p>
-                        <div className="text-[11px] pt-1 border-t border-amber-100/60 text-slate-500">
-                          โดย: <strong className="text-slate-700">{roomInfo.booking.creatorName}</strong>
+                  {isPending && roomInfo.booking && (() => {
+                    const canView = canViewBookingDetails(roomInfo.booking, currentUserEmail, isAdmin);
+                    return (
+                      <div className="space-y-2.5">
+                        <div className="text-[11px] font-bold text-amber-500 uppercase tracking-wider flex items-center justify-between">
+                          <span>อยู่ระหว่างการรออนุมัติ</span>
+                          {roomInfo.booking.isConfidential && (
+                            <span className="flex items-center space-x-1 text-[10px] text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
+                              <Lock className="h-3 w-3" />
+                              <span>ความลับสำคัญ</span>
+                            </span>
+                          )}
                         </div>
+                        <div className="bg-amber-50/50 p-3.5 rounded-xl border border-amber-100 space-y-2">
+                          <h4 className="font-semibold text-slate-800 text-sm line-clamp-1">
+                            {canView ? roomInfo.booking.title : 'ห้องประชุมไม่ว่าง'}
+                          </h4>
+                          <p className="text-xs text-slate-500 font-mono flex items-center space-x-1.5">
+                            <Clock className="h-3.5 w-3.5" />
+                            <span>
+                              {new Date(roomInfo.booking.startTime).toLocaleTimeString('th-TH', {hour: '2-digit', minute: '2-digit'})} - {new Date(roomInfo.booking.endTime).toLocaleTimeString('th-TH', {hour: '2-digit', minute: '2-digit'})}
+                            </span>
+                          </p>
+                          <div className="text-[11px] pt-1 border-t border-amber-100/60 text-slate-500">
+                            {canView ? (
+                              <span>โดย: <strong className="text-slate-700">{roomInfo.booking.creatorName}</strong></span>
+                            ) : (
+                              <span className="italic text-slate-400">ซ่อนรายละเอียดการประชุม</span>
+                            )}
+                          </div>
+                        </div>
+                        {isAdmin && (
+                          <button 
+                            onClick={() => onSelectTab('approvals')}
+                            className="w-full text-center text-xs bg-amber-600 text-white py-1.5 rounded-lg hover:bg-amber-700 transition-colors font-medium"
+                          >
+                            ตรวจสอบการอนุมัติการจอง
+                          </button>
+                        )}
                       </div>
-                      {isAdmin && (
-                        <button 
-                          onClick={() => onSelectTab('approvals')}
-                          className="w-full text-center text-xs bg-amber-600 text-white py-1.5 rounded-lg hover:bg-amber-700 transition-colors font-medium"
-                        >
-                          ตรวจสอบการอนุมัติการจอง
-                        </button>
-                      )}
-                    </div>
-                  )}
+                    );
+                  })()}
 
                   {isAvail && (
                     <div className="space-y-3 flex-1 flex flex-col justify-center">
-                      {roomInfo.nextBooking ? (
-                        <div className="bg-slate-50 p-3 rounded-xl border border-slate-100 space-y-1.5">
-                          <div className="text-[10px] text-slate-400 font-semibold uppercase">คิวถัดไปวันนี้</div>
-                          <h4 className="font-medium text-slate-700 text-xs line-clamp-1">{roomInfo.nextBooking.title}</h4>
-                          <div className="flex items-center justify-between text-[11px] text-slate-500 font-mono pt-1">
-                            <span>
-                              {new Date(roomInfo.nextBooking.startTime).toLocaleTimeString('th-TH', {hour: '2-digit', minute: '2-digit'})} - {new Date(roomInfo.nextBooking.endTime).toLocaleTimeString('th-TH', {hour: '2-digit', minute: '2-digit'})}
-                            </span>
-                            <span className="font-sans text-slate-600 font-medium">{roomInfo.nextBooking.creatorName}</span>
+                      {roomInfo.nextBooking ? (() => {
+                        const canView = canViewBookingDetails(roomInfo.nextBooking, currentUserEmail, isAdmin);
+                        return (
+                          <div className="bg-slate-50 p-3 rounded-xl border border-slate-100 space-y-1.5">
+                            <div className="text-[10px] text-slate-400 font-semibold uppercase flex items-center justify-between">
+                              <span>คิวถัดไปวันนี้</span>
+                              {roomInfo.nextBooking.isConfidential && (
+                                <span className="flex items-center space-x-1 text-[10px] text-amber-700">
+                                  <Lock className="h-2.5 w-2.5" />
+                                  <span>ความลับ</span>
+                                </span>
+                              )}
+                            </div>
+                            <h4 className="font-medium text-slate-700 text-xs line-clamp-1">
+                              {canView ? roomInfo.nextBooking.title : 'ห้องประชุมไม่ว่าง'}
+                            </h4>
+                            <div className="flex items-center justify-between text-[11px] text-slate-500 font-mono pt-1">
+                              <span>
+                                {new Date(roomInfo.nextBooking.startTime).toLocaleTimeString('th-TH', {hour: '2-digit', minute: '2-digit'})} - {new Date(roomInfo.nextBooking.endTime).toLocaleTimeString('th-TH', {hour: '2-digit', minute: '2-digit'})}
+                              </span>
+                              {canView ? (
+                                <span className="font-sans text-slate-600 font-medium">{roomInfo.nextBooking.creatorName}</span>
+                              ) : (
+                                <span className="font-sans text-slate-400 italic">ความลับสำคัญ</span>
+                              )}
+                            </div>
                           </div>
-                        </div>
-                      ) : (
+                        );
+                      })() : (
                         <div className="text-center py-6 text-slate-400 space-y-1.5">
                           <div className="text-sm">ไม่มีคิวจองแล้วในวันนี้</div>
                           <p className="text-[11px]">ห้องประชุมว่างตลอดทั้งวัน สามารถใช้งานได้ทันที</p>
@@ -422,36 +468,95 @@ export default function Dashboard({
                           </span>
                         </td>
                         <td className="py-3.5 px-4">
-                          <div className="font-semibold text-slate-800">{b.title}</div>
-                          {b.description && (
-                            <p className="text-xs text-slate-400 line-clamp-1">{b.description}</p>
-                          )}
+                          {(() => {
+                            const canView = canViewBookingDetails(b, currentUserEmail, isAdmin);
+                            if (!canView) {
+                              return (
+                                <div className="space-y-0.5">
+                                  <div className="font-semibold text-slate-700 flex items-center space-x-1.5">
+                                    <Lock className="h-3.5 w-3.5 text-amber-600" />
+                                    <span>ห้องประชุมไม่ว่าง</span>
+                                  </div>
+                                  <p className="text-xs text-slate-400 italic">ความลับสำคัญ</p>
+                                </div>
+                              );
+                            }
+                            return (
+                              <div>
+                                <div className="font-semibold text-slate-800 flex items-center space-x-1.5">
+                                  {b.isConfidential && (
+                                    <span className="flex items-center space-x-1 text-[10px] text-amber-700 bg-amber-50 px-1.5 py-0.2 rounded border border-amber-200">
+                                      <Lock className="h-2.5 w-2.5" />
+                                      <span>ความลับสำคัญ</span>
+                                    </span>
+                                  )}
+                                  <span>{b.title}</span>
+                                </div>
+                                {b.description && (
+                                  <p className="text-xs text-slate-400 line-clamp-1">{b.description}</p>
+                                )}
+                              </div>
+                            );
+                          })()}
                         </td>
                         <td className="py-3.5 px-4 font-mono text-xs text-slate-600">
                           {new Date(b.startTime).toLocaleTimeString('th-TH', {hour: '2-digit', minute: '2-digit'})} - {new Date(b.endTime).toLocaleTimeString('th-TH', {hour: '2-digit', minute: '2-digit'})}
                         </td>
                         <td className="py-3.5 px-4">
-                          <div className="font-medium text-slate-700">{b.creatorName}</div>
-                          <div className="text-[10px] text-slate-400">
-                            ผู้เข้าร่วม {b.attendees.length} คน
-                          </div>
+                          {(() => {
+                            const canView = canViewBookingDetails(b, currentUserEmail, isAdmin);
+                            if (!canView) {
+                              return <span className="text-xs text-slate-400 italic">ซ่อนข้อมูล</span>;
+                            }
+                            const hasVIP = b.attendees && b.attendees.some(a => isKeyAttendee(a.email));
+                            return (
+                              <>
+                                <div className="font-medium text-slate-700 flex items-center gap-1">
+                                  <span>{b.creatorName}</span>
+                                  {isKeyAttendee(b.creatorEmail) && (
+                                    <Star className="h-3 w-3 text-amber-500 fill-amber-400" title="ผู้จองคนสำคัญ" />
+                                  )}
+                                </div>
+                                <div 
+                                  className="text-[10px] text-slate-400 flex items-center gap-1 cursor-default"
+                                  title={b.attendees && b.attendees.length > 0 
+                                    ? `รายชื่อผู้เข้าร่วม:\n${sortAttendeesByPriority(b.attendees).map(a => `• ${a.displayName}${a.nickname ? ` (${a.nickname})` : ''} - ${a.email}`).join('\n')}` 
+                                    : ''}
+                                >
+                                  <span>ผู้เข้าร่วม {b.attendees.length} คน</span>
+                                  {hasVIP && (
+                                    <span className="inline-flex items-center gap-0.5 text-amber-700 font-bold bg-amber-50 border border-amber-200 px-1 rounded text-[9px]">
+                                      <Star className="h-2 w-2 text-amber-500 fill-amber-400" />
+                                      <span>มีคนสำคัญ</span>
+                                    </span>
+                                  )}
+                                </div>
+                              </>
+                            );
+                          })()}
                         </td>
                         <td className="py-3.5 px-4">
-                          {b.meetingLink ? (
-                            <a 
-                              href={b.meetingLink} 
-                              target="_blank" 
-                              rel="noreferrer"
-                              className={`inline-flex items-center space-x-1 text-xs px-2.5 py-1 rounded-md border font-semibold ${platformColors[b.meetingType] || 'bg-slate-50 text-slate-500'}`}
-                            >
-                              <Video className="h-3.5 w-3.5" />
-                              <span>{platformLabels[b.meetingType] || 'เข้าร่วมสาย'}</span>
-                            </a>
-                          ) : (
-                            <span className="text-xs text-slate-400 font-medium bg-slate-50 px-2 py-1 rounded border border-slate-100">
-                              -
-                            </span>
-                          )}
+                          {(() => {
+                            const canView = canViewBookingDetails(b, currentUserEmail, isAdmin);
+                            if (!canView) {
+                              return <span className="text-xs text-slate-400 font-medium bg-slate-50 px-2 py-1 rounded border border-slate-100">-</span>;
+                            }
+                            return b.meetingLink ? (
+                              <a 
+                                href={b.meetingLink} 
+                                target="_blank" 
+                                rel="noreferrer"
+                                className={`inline-flex items-center space-x-1 text-xs px-2.5 py-1 rounded-md border font-semibold ${platformColors[b.meetingType] || 'bg-slate-50 text-slate-500'}`}
+                              >
+                                <Video className="h-3.5 w-3.5" />
+                                <span>{platformLabels[b.meetingType] || 'เข้าร่วมสาย'}</span>
+                              </a>
+                            ) : (
+                              <span className="text-xs text-slate-400 font-medium bg-slate-50 px-2 py-1 rounded border border-slate-100">
+                                -
+                              </span>
+                            );
+                          })()}
                         </td>
                         <td className="py-3.5 px-4 text-right space-x-1.5">
                           {(isAdmin || currentUserEmail === b.creatorEmail) && onEditBooking && (

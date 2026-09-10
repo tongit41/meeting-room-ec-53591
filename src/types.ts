@@ -50,6 +50,7 @@ export interface Booking {
   createdAt: any;
   approvedBy?: string;
   rejectedReason?: string;
+  isConfidential?: boolean;
 }
 
 export interface ActivityLog {

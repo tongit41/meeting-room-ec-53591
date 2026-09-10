@@ -343,7 +343,7 @@ export default function UserManagement({ currentUserEmail, isAdmin }: UserManage
                             ? 'bg-rose-50 text-rose-700 border-rose-100' 
                             : 'bg-indigo-50 text-indigo-700 border-indigo-100'
                           }`}>
-                            {u.role === 'admin' ? 'ผู้ดูแลระบบ (Admin)' : 'พนักงาน (Employee)'}
+                            {u.role === 'admin' ? 'ผู้ดูแลระบบ (Admin)' : 'ผู้ใช้งาน'}
                           </span>
                           {isSelf && (
                             <span className="ml-1.5 text-[9px] bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded font-bold">
@@ -499,7 +499,7 @@ export default function UserManagement({ currentUserEmail, isAdmin }: UserManage
                       : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
                     }`}
                   >
-                    พนักงานทั่วไป
+                    ผู้ใช้งาน
                   </button>
                   <button
                     type="button"
