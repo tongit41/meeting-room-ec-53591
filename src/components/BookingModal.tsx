@@ -370,7 +370,7 @@ export default function BookingModal({
     setIsSubmitting(true);
     try {
       const selectedRoom = rooms.find(r => r.id === selectedRoomId);
-      const roomName = selectedRoom ? selectedRoom.name : 'ไม่ระบุห้องประชุม / ออนไลน์';
+      const roomName = selectedRoom ? selectedRoom.name.split(' (')[0] : 'ไม่ระบุห้องประชุม / ออนไลน์';
 
       // Auto link format or custom link
       let finalLink = customLink;
@@ -483,9 +483,9 @@ export default function BookingModal({
       <div className="bg-white rounded-2xl max-w-2xl w-full border border-slate-100 shadow-2xl overflow-hidden my-8 max-h-[90vh] flex flex-col">
         
         {/* Modal Header */}
-        <div className="p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+        <div className="p-5 border-b border-slate-100 flex items-center justify-between bg-[#F8FAFC]">
           <div className="space-y-1">
-            <h3 className="font-bold text-slate-800 text-lg">
+            <h3 className="font-bold text-[#0F172A] text-lg">
               {editingBooking ? 'แก้ไขกิจกรรมการจองห้องประชุม' : 'จองห้องประชุมใหม่'}
             </h3>
             <p className="text-xs text-slate-500">
@@ -494,7 +494,7 @@ export default function BookingModal({
           </div>
           <button 
             onClick={onClose}
-            className="p-1.5 bg-slate-100 text-slate-500 hover:text-slate-800 hover:bg-slate-200 rounded-lg transition-colors"
+            className="p-1.5 bg-slate-100 text-slate-500 hover:text-slate-800 hover:bg-slate-200 rounded-lg transition-colors cursor-pointer"
           >
             <X className="h-4 w-4" />
           </button>
@@ -565,7 +565,7 @@ export default function BookingModal({
                   <span>ความลับสำคัญ</span>
                 </span>
                 <p className="text-[11px] text-slate-500 mt-0.5">
-                  ซ่อนหัวข้อและรายละเอียดการประชุมนี้จากพนักงานทั่วไป (จะแสดงเป็น "ห้องประชุมไม่ว่าง") โดยเฉพาะผู้ดูแลระบบ, ผู้จอง และผู้ที่ได้รับเชิญเท่านั้นที่จะมองเห็นรายละเอียด
+                  ซ่อนหัวข้อ รายละเอียด และลิงก์การประชุมนี้จากพนักงานทั่วไป (จะแสดงเป็น "ห้องประชุมไม่ว่าง") โดยยังคงเปิดให้เห็นรายชื่อผู้เข้าร่วมประชุม เพื่อให้ผู้อื่นทราบว่าใครเข้าประชุมบ้าง
                 </p>
               </label>
             </div>
@@ -586,7 +586,7 @@ export default function BookingModal({
                 <option value="">-- ไม่ระบุห้องประชุม (ประชุมออนไลน์ / นอกสถานที่) --</option>
                 {rooms.map(r => (
                   <option key={r.id} value={r.id}>
-                    {r.name}
+                    {r.name ? r.name.split(' (')[0] : r.id}
                   </option>
                 ))}
               </select>
@@ -1015,7 +1015,7 @@ export default function BookingModal({
           <button
             type="button"
             onClick={onClose}
-            className="px-4 py-2 border border-slate-200 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl transition-colors"
+            className="px-4 py-2 border border-slate-200 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl transition-colors cursor-pointer"
           >
             ยกเลิก
           </button>
@@ -1023,7 +1023,7 @@ export default function BookingModal({
             type="button"
             onClick={handleSubmitForm}
             disabled={isSubmitting}
-            className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-xl shadow-sm transition-colors flex items-center space-x-2 disabled:opacity-50 cursor-pointer"
+            className="px-5 py-2 bg-[#60A5FA] hover:bg-[#3B82F6] text-white text-xs font-semibold rounded-xl shadow-[0_4px_14px_rgba(96,165,250,0.35)] hover:shadow-[0_6px_15px_-3px_rgba(59,130,246,0.25)] transition-all flex items-center space-x-2 disabled:opacity-50 cursor-pointer"
           >
             {isSubmitting ? (
               <span>กำลังบันทึก...</span>

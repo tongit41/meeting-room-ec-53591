@@ -81,10 +81,10 @@ export function sortAttendeesByPriority<T extends { email: string; displayName?:
  * Check if the user can see confidential details of a booking:
  * - If booking is not confidential, everyone can see details.
  * - If booking is confidential:
- *    - Admin can see details.
- *    - Creator of booking can see details.
- *    - Attendees chosen for the meeting can see details.
- *    - Regular users (employee role) who are NOT in the attendee list will ONLY see that the room is busy ("ห้องประชุมไม่ว่าง (ความลับสำคัญ)"), hiding title, description, and online links.
+ *    - Admin can see all details.
+ *    - Creator of booking can see all details.
+ *    - Attendees chosen for the meeting can see all details.
+ *    - Regular users (employee role) who are NOT in the attendee list will see that the room is busy ("ห้องประชุมไม่ว่าง"), hiding title, description, and meeting links, while the attendee list remains visible to show who is participating.
  */
 export const canViewBookingDetails = (
   booking: Booking,

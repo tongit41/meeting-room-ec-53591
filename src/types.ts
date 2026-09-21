@@ -27,6 +27,8 @@ export interface MeetingRoom {
 
 export type BookingStatus = 'pending' | 'approved' | 'rejected';
 export type MeetingPlatform = 'meet' | 'teams' | 'zoom' | 'external' | 'none';
+export type EntryType = 'meeting' | 'announcement';
+export type AnnouncementCategory = 'out_of_office' | 'travel' | 'general' | 'leave' | 'urgent';
 
 export interface Booking {
   id: string;
@@ -51,6 +53,12 @@ export interface Booking {
   approvedBy?: string;
   rejectedReason?: string;
   isConfidential?: boolean;
+
+  // Announcement & Notice fields
+  entryType?: EntryType; // 'meeting' (default) or 'announcement'
+  isAllDay?: boolean;    // true for all-day notices like "ซ้อไปใต้"
+  announcementCategory?: AnnouncementCategory;
+  color?: string;        // 'purple', 'indigo', 'emerald', 'amber', 'rose', 'sky'
 }
 
 export interface ActivityLog {

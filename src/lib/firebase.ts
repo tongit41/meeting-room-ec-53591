@@ -102,12 +102,12 @@ provider.setCustomParameters({
 let cachedAccessToken: string | null = null;
 let isSigningIn = false;
 
-// Meeting rooms static configuration (named exactly as requested)
+// Meeting rooms static configuration
 export const MEETING_ROOMS: MeetingRoom[] = [
   {
     id: 'room1',
-    name: 'ห้องประชุม 1 (Focus Room)',
-    displayName: 'ห้องประชุม 1 (Focus Room)',
+    name: 'ห้องประชุม 1',
+    displayName: 'ห้องประชุม 1',
     capacity: 4,
     amenities: ['Whiteboard', '4K Monitor', 'High-speed Wi-Fi', 'Coffee Station Access'],
     color: 'emerald',
@@ -116,8 +116,8 @@ export const MEETING_ROOMS: MeetingRoom[] = [
   },
   {
     id: 'room2',
-    name: 'ห้องประชุม 2 (Synergy Room)',
-    displayName: 'ห้องประชุม 2 (Synergy Room)',
+    name: 'ห้องประชุม 2',
+    displayName: 'ห้องประชุม 2',
     capacity: 8,
     amenities: ['Interactive Smart TV', 'Polycom Video Conference', 'Glass Whiteboard', 'Wireless Presentation Screen'],
     color: 'indigo',
@@ -126,8 +126,8 @@ export const MEETING_ROOMS: MeetingRoom[] = [
   },
   {
     id: 'room3',
-    name: 'ห้องประชุม 3 (Vision Hall)',
-    displayName: 'ห้องประชุม 3 (Vision Hall)',
+    name: 'ห้องประชุม 3',
+    displayName: 'ห้องประชุม 3',
     capacity: 20,
     amenities: ['Dual Projectors', 'Wireless Mics & Sound System', 'Stage & Podium', 'Video Recording Setup', 'Catering Station'],
     color: 'amber',

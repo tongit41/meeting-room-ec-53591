@@ -14,7 +14,6 @@ import {
   Save,
   ShieldAlert,
   Check,
-  Clock,
   LogIn
 } from 'lucide-react';
 import { UserAccount, UserRole } from '../types';
@@ -146,7 +145,7 @@ export default function UserManagement({ currentUserEmail, isAdmin }: UserManage
           handleFirestoreError(error, OperationType.UPDATE, `users/${editingUserId}`);
         }
         
-        setFormSuccess('อัปเดตข้อมูลพนักงานสำเร็จ!');
+        setFormSuccess('อัปเดตข้อมูลสำเร็จ!');
       } else {
         // Create flow
         // Check if email already exists
@@ -171,7 +170,7 @@ export default function UserManagement({ currentUserEmail, isAdmin }: UserManage
         } catch (error) {
           handleFirestoreError(error, OperationType.CREATE, `users/${newDocRef.id}`);
         }
-        setFormSuccess('เพิ่มรายชื่อพนักงานเข้าสู่ระบบสำเร็จ!');
+        setFormSuccess('เพิ่มรายชื่อเข้าสู่ระบบสำเร็จ!');
       }
 
       clearForm();
@@ -192,14 +191,14 @@ export default function UserManagement({ currentUserEmail, isAdmin }: UserManage
     try {
       try {
         await deleteDoc(doc(db, 'users', userId));
-        setFormSuccess('ลบรายชื่อพนักงานออกจากระบบสำเร็จ!');
+        setFormSuccess('ลบรายชื่อออกจากระบบสำเร็จ!');
       } catch (error) {
         handleFirestoreError(error, OperationType.DELETE, `users/${userId}`);
       }
       fetchUsers();
     } catch (error) {
       console.error('Error deleting user:', error);
-      setFormError('ไม่สามารถลบผู้ใช้ออกจากระบบได้');
+      setFormError('ไม่สามารถลบผู้ใช้งานออกจากระบบได้');
     }
   };
 
@@ -217,11 +216,11 @@ export default function UserManagement({ currentUserEmail, isAdmin }: UserManage
     <div className="space-y-6" id="user-management-root">
       {/* Title */}
       <div>
-        <h2 className="text-xl font-bold text-slate-800 flex items-center space-x-2">
-          <Users className="h-5 w-5 text-indigo-600" />
-          <span>การจัดการบัญชีผู้ใช้และพนักงาน</span>
+        <h2 className="text-lg sm:text-xl font-bold text-[#0F172A] flex items-center space-x-2">
+          <Users className="h-5 w-5 text-[#3B82F6]" />
+          <span>การจัดการบัญชีผู้ใช้งาน</span>
         </h2>
-        <p className="text-xs text-slate-500">เพิ่ม ลบ หรือแก้ไขข้อมูลพนักงานเพื่อดึงเข้ากิจกรรมประชุม กำหนดบทบาทพนักงานหรือแอดมิน</p>
+        <p className="text-xs text-slate-500">เพิ่ม ลบ หรือแก้ไขข้อมูลผู้ใช้งานเพื่อดึงเข้ากิจกรรมประชุม กำหนดสิทธิ์ผู้ใช้งานหรือแอดมิน</p>
       </div>
 
       {/* Global Notifications Alert Area */}
@@ -256,7 +255,7 @@ export default function UserManagement({ currentUserEmail, isAdmin }: UserManage
         {/* Left Grid: Accounts List */}
         <div className="lg:col-span-2 bg-white rounded-2xl border border-slate-200 p-6 shadow-sm space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
-            <h3 className="font-bold text-slate-800 text-sm">รายชื่อพนักงานทั้งหมด ({filteredUsers.length} คน)</h3>
+            <h3 className="font-bold text-slate-800 text-sm">รายชื่อผู้ใช้งานทั้งหมด ({filteredUsers.length} คน)</h3>
             
             {/* Search Input */}
             <div className="relative">
@@ -264,7 +263,7 @@ export default function UserManagement({ currentUserEmail, isAdmin }: UserManage
                 type="text"
                 value={searchTerm}
                 onChange={e => setSearchTerm(e.target.value)}
-                placeholder="ค้นหาพนักงาน/อีเมล/บทบาท..."
+                placeholder="ค้นหาผู้ใช้/อีเมล/สิทธิ์..."
                 className="w-full sm:w-[220px] text-xs pl-8 pr-3 py-1.5 rounded-lg border border-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500"
               />
               <Search className="h-3.5 w-3.5 text-slate-400 absolute left-2.5 top-2.5" />
@@ -275,36 +274,20 @@ export default function UserManagement({ currentUserEmail, isAdmin }: UserManage
             <table className="w-full text-left border-collapse text-xs">
               <thead>
                 <tr className="border-b border-slate-100 text-slate-400 uppercase tracking-wider font-semibold">
-                  <th className="py-3 px-3">พนักงาน</th>
+                  <th className="py-3 px-3">ผู้ใช้งาน</th>
                   <th className="py-3 px-3">อีเมลติดต่อ</th>
                   <th className="py-3 px-3">สิทธิ์การใช้งาน</th>
-                  <th className="py-3 px-3">เข้าสู่ระบบล่าสุด</th>
-                  {isAdmin && <th className="py-3 px-3 text-right">เครื่องมือ</th>}
+                  {isAdmin && <th className="py-3 px-3 text-right">แก้ไข/ลบ</th>}
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-50">
                 {loading ? (
                   <tr>
-                    <td colSpan={isAdmin ? 5 : 4} className="text-center py-6 text-slate-400">กำลังดาวน์โหลดข้อมูลพนักงาน...</td>
+                    <td colSpan={isAdmin ? 4 : 3} className="text-center py-6 text-slate-400">กำลังดาวน์โหลดข้อมูลผู้ใช้งาน...</td>
                   </tr>
                 ) : filteredUsers.length > 0 ? (
                   filteredUsers.map(u => {
                     const isSelf = u.email === currentUserEmail;
-                    const formattedLastLogin = u.lastLoginAt ? (() => {
-                      try {
-                        const d = new Date(u.lastLoginAt);
-                        if (isNaN(d.getTime())) return 'ยังไม่เคยเข้าใช้';
-                        return d.toLocaleString('th-TH', {
-                          day: 'numeric',
-                          month: 'short',
-                          year: 'numeric',
-                          hour: '2-digit',
-                          minute: '2-digit'
-                        }) + ' น.';
-                      } catch {
-                        return 'ยังไม่เคยเข้าใช้';
-                      }
-                    })() : 'ยังไม่เคยเข้าใช้';
 
                     return (
                       <tr key={u.id} className="hover:bg-slate-50/50 transition-colors">
@@ -343,7 +326,7 @@ export default function UserManagement({ currentUserEmail, isAdmin }: UserManage
                             ? 'bg-rose-50 text-rose-700 border-rose-100' 
                             : 'bg-indigo-50 text-indigo-700 border-indigo-100'
                           }`}>
-                            {u.role === 'admin' ? 'ผู้ดูแลระบบ (Admin)' : 'ผู้ใช้งาน'}
+                            {u.role === 'admin' ? 'ผู้ดูแลระบบ' : 'ผู้ใช้งาน'}
                           </span>
                           {isSelf && (
                             <span className="ml-1.5 text-[9px] bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded font-bold">
@@ -351,19 +334,13 @@ export default function UserManagement({ currentUserEmail, isAdmin }: UserManage
                             </span>
                           )}
                         </td>
-                        <td className="py-3.5 px-3">
-                          <div className="text-slate-600 flex items-center gap-1 font-medium text-[11px]">
-                            <Clock className="h-3 w-3 text-slate-400 shrink-0" />
-                            <span>{formattedLastLogin}</span>
-                          </div>
-                        </td>
                         {isAdmin && (
                           <td className="py-3.5 px-3 text-right">
                             <div className="flex items-center justify-end space-x-1">
                               <button
                                 onClick={() => handleEditClick(u)}
                                 className="p-1 text-indigo-600 hover:bg-indigo-50 rounded cursor-pointer"
-                                title="แก้ไขพนักงาน"
+                                title="แก้ไขผู้ใช้งาน"
                               >
                                 <Edit3 className="h-3.5 w-3.5" />
                               </button>
@@ -392,7 +369,7 @@ export default function UserManagement({ currentUserEmail, isAdmin }: UserManage
                   })
                 ) : (
                   <tr>
-                    <td colSpan={isAdmin ? 5 : 4} className="text-center py-8 text-slate-400">ไม่พบรายชื่อพนักงานที่ระบุ</td>
+                    <td colSpan={isAdmin ? 4 : 3} className="text-center py-8 text-slate-400">ไม่พบรายชื่อผู้ใช้งานที่ระบุ</td>
                   </tr>
                 )}
               </tbody>
@@ -401,11 +378,11 @@ export default function UserManagement({ currentUserEmail, isAdmin }: UserManage
         </div>
 
         {/* Right Grid: Create / Edit Form */}
-        <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm space-y-4">
+        <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-[0_4px_20px_-2px_rgba(15,23,42,0.05)] space-y-4">
           <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-            <h3 className="font-bold text-slate-800 text-sm flex items-center space-x-1.5">
-              {isEditing ? <Edit3 className="h-4 w-4 text-indigo-600" /> : <UserPlus className="h-4 w-4 text-indigo-600" />}
-              <span>{isEditing ? 'แก้ไขข้อมูลพนักงาน' : 'เพิ่มพนักงานเข้าระบบ'}</span>
+            <h3 className="font-bold text-[#0F172A] text-sm flex items-center space-x-1.5">
+              {isEditing ? <Edit3 className="h-4 w-4 text-[#3B82F6]" /> : <UserPlus className="h-4 w-4 text-[#3B82F6]" />}
+              <span>{isEditing ? 'แก้ไขข้อมูลผู้ใช้งาน' : 'เพิ่มผู้ใช้งานเข้าระบบ'}</span>
             </h3>
             {(isEditing || email || displayName || nickname) && (
               <button 
@@ -421,8 +398,8 @@ export default function UserManagement({ currentUserEmail, isAdmin }: UserManage
           {!isAdmin ? (
             <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 text-center space-y-2 text-xs">
               <ShieldAlert className="h-8 w-8 text-amber-500 mx-auto" />
-              <div className="font-bold text-slate-700">สิทธิ์พนักงานจำกัด</div>
-              <p className="text-slate-400">เฉพาะผู้ใช้งานระดับ ผู้ดูแลระบบ (Admin) เท่านั้นที่สามารถเพิ่ม ลบ หรือแก้ไขข้อมูลของพนักงานท่านอื่นได้</p>
+              <div className="font-bold text-slate-700">สิทธิ์ผู้ใช้งานจำกัด</div>
+              <p className="text-slate-400">เฉพาะระดับ ผู้ดูแลระบบ (Admin) เท่านั้นที่สามารถเพิ่ม ลบ หรือแก้ไขข้อมูลของพนักงานท่านอื่นได้</p>
             </div>
           ) : (
             <form onSubmit={handleSaveUser} className="space-y-4 text-xs">
@@ -446,7 +423,7 @@ export default function UserManagement({ currentUserEmail, isAdmin }: UserManage
                     required
                     value={displayName}
                     onChange={e => setDisplayName(e.target.value)}
-                    placeholder="เช่น นายสมบูรณ์ ดีเลิศ"
+                    placeholder=" "
                     className="w-full pl-8 pr-3 py-2 rounded-lg border border-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500"
                   />
                   <User className="h-3.5 w-3.5 text-slate-400 absolute left-2.5 top-2.5" />
@@ -462,7 +439,7 @@ export default function UserManagement({ currentUserEmail, isAdmin }: UserManage
                     required
                     value={nickname}
                     onChange={e => setNickname(e.target.value)}
-                    placeholder="เช่น บอย"
+                    placeholder=" "
                     className="w-full pl-8 pr-3 py-2 rounded-lg border border-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500"
                   />
                   <Heart className="h-3.5 w-3.5 text-slate-400 absolute left-2.5 top-2.5" />
@@ -479,7 +456,7 @@ export default function UserManagement({ currentUserEmail, isAdmin }: UserManage
                     disabled={isEditing} // Avoid changing primary identifier email directly
                     value={email}
                     onChange={e => setEmail(e.target.value)}
-                    placeholder="เช่น somboon.d@ec.co.th"
+                    placeholder=" "
                     className="w-full pl-8 pr-3 py-2 rounded-lg border border-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500 disabled:bg-slate-50 disabled:text-slate-400"
                   />
                   <Mail className="h-3.5 w-3.5 text-slate-400 absolute left-2.5 top-2.5" />
@@ -510,7 +487,7 @@ export default function UserManagement({ currentUserEmail, isAdmin }: UserManage
                       : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
                     }`}
                   >
-                    ผู้ดูแลระบบ (Admin)
+                    ผู้ดูแลระบบ
                   </button>
                 </div>
               </div>
@@ -518,10 +495,10 @@ export default function UserManagement({ currentUserEmail, isAdmin }: UserManage
               {/* Actions */}
               <button
                 type="submit"
-                className="w-full py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl transition-all shadow-sm flex items-center justify-center space-x-1.5"
+                className="w-full py-2.5 bg-[#60A5FA] hover:bg-[#3B82F6] text-white font-semibold rounded-xl transition-all shadow-[0_4px_14px_rgba(96,165,250,0.35)] hover:shadow-[0_6px_15px_-3px_rgba(59,130,246,0.25)] flex items-center justify-center space-x-1.5 cursor-pointer"
               >
                 <Save className="h-3.5 w-3.5" />
-                <span>{isEditing ? 'อัปเดตข้อมูลพนักงาน' : 'เพิ่มรายชื่อพนักงาน'}</span>
+                <span>{isEditing ? 'อัปเดตข้อมูลผู้ใช้งาน' : 'เพิ่มรายชื่อผู้ใช้งาน'}</span>
               </button>
             </form>
           )}
@@ -536,7 +513,7 @@ export default function UserManagement({ currentUserEmail, isAdmin }: UserManage
               <div className="p-2 bg-rose-50 rounded-full">
                 <Trash2 className="h-6 w-6 text-rose-500 animate-pulse" />
               </div>
-              <h3 className="text-base font-bold text-slate-800">ยืนยันการลบพนักงาน</h3>
+              <h3 className="text-base font-bold text-slate-800">ยืนยันการลบผู้ใช้งาน</h3>
             </div>
             
             <div className="space-y-2 text-sm text-slate-600">

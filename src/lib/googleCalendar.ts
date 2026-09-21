@@ -48,16 +48,28 @@ export async function createGoogleCalendarEvent(
       summary: booking.title,
       description: booking.description,
       location: booking.roomName,
-      start: {
-        dateTime: formatToLocalISO(booking.startTime),
-        timeZone: 'Asia/Bangkok'
-      },
-      end: {
-        dateTime: formatToLocalISO(booking.endTime),
-        timeZone: 'Asia/Bangkok'
-      },
       attendees: attendeesList,
     };
+
+    if (booking.isAllDay) {
+      const startDate = booking.startTime.split('T')[0];
+      const endDate = booking.endTime ? booking.endTime.split('T')[0] : startDate;
+      // In Google Calendar API, all-day end date is exclusive, so add 1 day
+      const endObj = new Date(endDate);
+      endObj.setDate(endObj.getDate() + 1);
+      const nextDayStr = endObj.toISOString().split('T')[0];
+      eventBody.start = { date: startDate };
+      eventBody.end = { date: nextDayStr };
+    } else {
+      eventBody.start = {
+        dateTime: formatToLocalISO(booking.startTime),
+        timeZone: 'Asia/Bangkok'
+      };
+      eventBody.end = {
+        dateTime: formatToLocalISO(booking.endTime),
+        timeZone: 'Asia/Bangkok'
+      };
+    }
 
     // If platform is Google Meet, we request conference creation
     if (booking.meetingType === 'meet') {
