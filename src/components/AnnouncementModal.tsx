@@ -1,21 +1,16 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   X, 
   Calendar, 
   Clock, 
-  Users, 
   Megaphone, 
   Plane, 
   UserMinus, 
   AlertCircle, 
-  Check, 
-  Star,
   Info
 } from 'lucide-react';
-import { Booking, AnnouncementCategory, UserAccount } from '../types';
-import { db, handleFirestoreError, OperationType } from '../lib/firebase';
-import { collection, getDocs } from 'firebase/firestore';
-import { isKeyAttendee, sortAttendeesByPriority } from '../lib/permissions';
+import { Booking, AnnouncementCategory } from '../types';
+import { sortAttendeesByPriority } from '../lib/permissions';
 
 export interface AnnouncementModalProps {
   isOpen: boolean;
@@ -30,30 +25,10 @@ export interface AnnouncementModalProps {
 }
 
 const CATEGORY_OPTIONS: Array<{ id: AnnouncementCategory; label: string; icon: any; color: string }> = [
-  { id: 'travel', label: 'ไปต่างจังหวัด', icon: Plane, color: 'text-purple-600 bg-purple-50 border-purple-200' },
+  { id: 'travel', label: 'ท่องเที่ยว', icon: Plane, color: 'text-purple-600 bg-purple-50 border-purple-200' },
   { id: 'out_of_office', label: 'ไม่อยู่', icon: UserMinus, color: 'text-amber-600 bg-amber-50 border-amber-200' },
   { id: 'general', label: 'ข่าวสารทั่วไป', icon: Megaphone, color: 'text-indigo-600 bg-indigo-50 border-indigo-200' },
   { id: 'urgent', label: 'สำคัญ / ด่วน', icon: AlertCircle, color: 'text-rose-600 bg-rose-50 border-rose-200' },
-];
-
-const COLOR_OPTIONS = [
-  { id: 'purple', label: 'สีม่วง (Google Calendar)', bgClass: 'bg-purple-700 text-white', borderClass: 'border-purple-600 ring-purple-400' },
-  { id: 'indigo', label: 'สีน้ำเงินคราม', bgClass: 'bg-indigo-600 text-white', borderClass: 'border-indigo-500 ring-indigo-300' },
-  { id: 'emerald', label: 'สีเขียวมรกต', bgClass: 'bg-emerald-600 text-white', borderClass: 'border-emerald-500 ring-emerald-300' },
-  { id: 'amber', label: 'สีส้มอำพัน', bgClass: 'bg-amber-600 text-white', borderClass: 'border-amber-500 ring-amber-300' },
-  { id: 'rose', label: 'สีแดงกุหลาบ', bgClass: 'bg-rose-600 text-white', borderClass: 'border-rose-500 ring-rose-300' },
-  { id: 'sky', label: 'สีฟ้าสดใส', bgClass: 'bg-sky-600 text-white', borderClass: 'border-sky-500 ring-sky-300' },
-];
-
-// Pre-defined VIP Executive accounts to ensure executives are always immediately selectable
-const DEFAULT_VIP_EXECUTIVES: UserAccount[] = [
-  { id: 'vip-meechai', email: 'meechai.chun@gmail.com', displayName: 'มีชัย ชุนหรักษ์โชติ', nickname: 'คุณมีชัย', role: 'admin' },
-  { id: 'vip-supanee', email: 'supanee.chun@gmail.com', displayName: 'สุภาณี ชุนหรักษ์โชติ', nickname: 'คุณสุภาณี', role: 'admin' },
-  { id: 'vip-supamet', email: 'supamet.c@ec.co.th', displayName: 'ศุภเมธ ชุนหรักษ์โชติ', nickname: 'คุณโอ', role: 'admin' },
-  { id: 'vip-achira', email: 'achira.c@ec.co.th', displayName: 'อชิระ ชุนหรักษ์โชติ', nickname: 'คุณอชิ', role: 'admin' },
-  { id: 'vip-chanatip', email: 'chanatip.h@ec.co.th', displayName: 'ชนาธิป หงษ์สมุทร', nickname: 'คุณอาร์ท', role: 'admin' },
-  { id: 'vip-chompoonuch', email: 'chompoonuch.s@ec.co.th', displayName: 'ชมพูนุช ศักดิ์ศิริ', nickname: 'คุณนุช', role: 'admin' },
-  { id: 'vip-tassanee', email: 'tassanee.t@ec.co.th', displayName: 'ทัศนีย์ ตาลสุข', nickname: 'คุณทัศ', role: 'admin' },
 ];
 
 export default function AnnouncementModal({
@@ -77,50 +52,9 @@ export default function AnnouncementModal({
   const [endTime, setEndTime] = useState('17:00');
   const [color, setColor] = useState('purple');
   const [description, setDescription] = useState('');
-  const [availableUsers, setAvailableUsers] = useState<UserAccount[]>([]);
   const [selectedAttendees, setSelectedAttendees] = useState<Array<{ email: string; displayName: string; nickname?: string }>>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
-
-  // Load registered users from Firestore for attendee selection
-  useEffect(() => {
-    const fetchUsers = async () => {
-      try {
-        const snap = await getDocs(collection(db, 'users'));
-        const list: UserAccount[] = [];
-        snap.forEach((d) => {
-          list.push({ id: d.id, ...d.data() } as UserAccount);
-        });
-        setAvailableUsers(list);
-      } catch (err) {
-        console.warn('Unable to load users for announcement:', err);
-      }
-    };
-    if (isOpen) {
-      fetchUsers();
-    }
-  }, [isOpen]);
-
-  // Filter and display ONLY VIP management/executives as requested
-  const vipAttendees = useMemo(() => {
-    // 1. Get all VIP users from loaded database users
-    const fromDb = availableUsers.filter(u => isKeyAttendee(u.email));
-    
-    // 2. Supplement with any known VIP executives not yet in DB so they are always selectable
-    const combined = [...fromDb];
-    for (const defVip of DEFAULT_VIP_EXECUTIVES) {
-      const alreadyExists = combined.some(u => {
-        const uPrefix = u.email.toLowerCase().split('@')[0];
-        const defPrefix = defVip.email.toLowerCase().split('@')[0];
-        return u.email.toLowerCase() === defVip.email.toLowerCase() || uPrefix === defPrefix;
-      });
-      if (!alreadyExists) {
-        combined.push(defVip);
-      }
-    }
-    
-    return sortAttendeesByPriority(combined);
-  }, [availableUsers]);
 
   // Initialize or reset form state
   useEffect(() => {
@@ -174,19 +108,6 @@ export default function AnnouncementModal({
 
   if (!isOpen) return null;
 
-  const toggleAttendee = (user: UserAccount) => {
-    const exists = selectedAttendees.some(a => a.email.toLowerCase() === user.email.toLowerCase());
-    if (exists) {
-      setSelectedAttendees(selectedAttendees.filter(a => a.email.toLowerCase() !== user.email.toLowerCase()));
-    } else {
-      setSelectedAttendees([...selectedAttendees, {
-        email: user.email,
-        displayName: user.displayName,
-        nickname: user.nickname
-      }]);
-    }
-  };
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage('');
@@ -197,7 +118,7 @@ export default function AnnouncementModal({
     }
 
     if (!title.trim()) {
-      setErrorMessage('กรุณาระบุหัวข้อประกาศ (เช่น ซ้อไปใต้, คุณสุภาณีไปเขาใหญ่)');
+      setErrorMessage('กรุณาระบุหัวข้อประกาศ');
       return;
     }
 
@@ -311,7 +232,7 @@ export default function AnnouncementModal({
               id="announcement-title-input"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              placeholder="เช่น ซ้อไปใต้, คุณสุภาณีไปเขาใหญ่, คุณมีชัยนัดพบแพทย์ กทม."
+              placeholder="รายละเอียดเพิ่มเติม...."
               className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-purple-500 focus:bg-white transition-all"
               required
             />
@@ -430,76 +351,6 @@ export default function AnnouncementModal({
                 </div>
               </div>
             )}
-          </div>
-
-          {/* Color Selection (Google Calendar Banner Style) */}
-          <div className="space-y-1.5">
-            <label className="text-xs font-bold text-slate-700">สีแถบประกาศบนปฏิทิน</label>
-            <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
-              {COLOR_OPTIONS.map((c) => {
-                const isSelected = color === c.id;
-                return (
-                  <button
-                    key={c.id}
-                    type="button"
-                    onClick={() => setColor(c.id)}
-                    className={`py-2 px-2 rounded-lg text-xs font-bold transition-all flex items-center justify-center space-x-1 cursor-pointer ${c.bgClass} ${
-                      isSelected ? 'ring-3 ring-offset-1 ' + c.borderClass : 'opacity-85 hover:opacity-100'
-                    }`}
-                  >
-                    {isSelected && <Check className="h-3.5 w-3.5" />}
-                    <span className="text-[11px] truncate">{c.id === 'purple' ? 'ม่วง' : c.label.replace('สี', '')}</span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Attendees / Person Involved (VIP Executives Only) */}
-          <div className="space-y-1.5">
-            <div className="flex items-center justify-between">
-              <label className="text-xs font-bold text-slate-700 flex items-center space-x-1.5">
-                <Users className="h-3.5 w-3.5 text-purple-600" />
-                <span>บุคคลที่เกี่ยวข้อง (เฉพาะผู้บริหาร VIP)</span>
-              </label>
-              <span className="text-[11px] text-purple-700 font-semibold">
-                {selectedAttendees.length > 0 ? `เลือกแล้ว ${selectedAttendees.length} ท่าน` : 'เฉพาะผู้บริหาร VIP'}
-              </span>
-            </div>
-
-            <div className="max-h-48 overflow-y-auto border border-slate-200 rounded-xl p-2 bg-slate-50/50 space-y-1.5">
-              {vipAttendees.map((u) => {
-                const isSelected = selectedAttendees.some(a => a.email.toLowerCase() === u.email.toLowerCase());
-                return (
-                  <div
-                    key={u.id || u.email}
-                    onClick={() => toggleAttendee(u)}
-                    className={`flex items-center justify-between p-2 rounded-xl text-xs cursor-pointer transition-all ${
-                      isSelected
-                        ? 'bg-purple-50 border border-purple-300 text-purple-900 font-semibold shadow-2xs'
-                        : 'hover:bg-white text-slate-700 bg-white/80 border border-slate-200'
-                    }`}
-                  >
-                    <div className="flex items-center space-x-2.5">
-                      <input
-                        type="checkbox"
-                        checked={isSelected}
-                        onChange={() => {}}
-                        className="w-4 h-4 rounded border-slate-300 text-purple-600 focus:ring-purple-500 cursor-pointer"
-                      />
-                      <span className="font-semibold text-slate-800">
-                        {u.displayName} {u.nickname ? `(${u.nickname})` : ''}
-                      </span>
-                      <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300 shadow-2xs">
-                        <Star className="h-2.5 w-2.5 mr-0.5 fill-amber-500 text-amber-500" />
-                        VIP
-                      </span>
-                    </div>
-                    <span className="text-[11px] text-slate-400 font-mono">{u.email}</span>
-                  </div>
-                );
-              })}
-            </div>
           </div>
 
           {/* Description / Additional Notes */}

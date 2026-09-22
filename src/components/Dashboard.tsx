@@ -182,7 +182,7 @@ export default function Dashboard({
             </span>
           </div>
           <h1 className="text-2xl sm:text-[26px] font-bold tracking-tight text-[#0F172A] leading-tight">
-            ระบบบริหารจัดการห้องประชุมอัจฉริยะ
+            ระบบบริหารจัดการห้องประชุม EC
           </h1>
           <p className="text-slate-600 text-xs sm:text-sm max-w-2xl leading-relaxed">
             จองห้องประชุม ค้นหาสล็อตเวลา ซิงค์ Google Calendar และสร้างลิงก์วิดีโอคอลได้ทันที
@@ -247,7 +247,7 @@ export default function Dashboard({
             </div>
             <div>
               <div className="flex items-center space-x-2">
-                <h3 className="font-bold text-[#0F172A] text-sm sm:text-base">ประกาศข่าวสาร & แจ้งไม่อยู่ / ไปต่างจังหวัด</h3>
+                <h3 className="font-bold text-[#0F172A] text-sm sm:text-base">ประกาศข่าวสาร / แจ้งเพื่อทราบ</h3>
                 <span className="text-[10px] font-bold px-2 py-0.5 bg-purple-50 text-purple-700 border border-purple-200 rounded-full">
                   ทุกคนมองเห็นได้
                 </span>

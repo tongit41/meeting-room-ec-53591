@@ -98,8 +98,9 @@ provider.setCustomParameters({
   prompt: 'select_account'
 });
 
-// Cache the access token in memory
-let cachedAccessToken: string | null = null;
+// Cache the access token in memory & localStorage for persistent session
+const ACCESS_TOKEN_KEY = 'google_calendar_access_token';
+let cachedAccessToken: string | null = typeof window !== 'undefined' ? localStorage.getItem(ACCESS_TOKEN_KEY) : null;
 let isSigningIn = false;
 
 // Meeting rooms static configuration
@@ -145,16 +146,15 @@ export const initAuth = (
     if (user) {
       if (user.isAnonymous) {
         onAuthSuccess(user, '');
-      } else if (cachedAccessToken) {
-        onAuthSuccess(user, cachedAccessToken);
       } else {
-        // If we have a user but token wasn't cached (e.g. refresh), we might need to prompt login 
-        // to get the calendar API access token. In client SPAs, the access token resides inside GoogleAuthProvider result.
-        // Therefore, we trigger sign-in if needed or let the App state know we need token.
-        onAuthFailure();
+        // Keep authenticated session active indefinitely
+        onAuthSuccess(user, cachedAccessToken || '');
       }
     } else {
       cachedAccessToken = null;
+      if (typeof window !== 'undefined') {
+        localStorage.removeItem(ACCESS_TOKEN_KEY);
+      }
       onAuthFailure();
     }
   });
@@ -171,6 +171,9 @@ export const googleSignIn = async (): Promise<{ user: User; accessToken: string 
     }
 
     cachedAccessToken = credential.accessToken;
+    if (typeof window !== 'undefined') {
+      localStorage.setItem(ACCESS_TOKEN_KEY, credential.accessToken);
+    }
     return { user: result.user, accessToken: cachedAccessToken };
   } catch (error: any) {
     if (
@@ -234,6 +237,9 @@ export const anonymousSignIn = async (email: string, displayName: string, nickna
 export const googleSignOut = async () => {
   await signOut(auth);
   cachedAccessToken = null;
+  if (typeof window !== 'undefined') {
+    localStorage.removeItem(ACCESS_TOKEN_KEY);
+  }
 };
 
 // Retrieve cached access token
@@ -244,6 +250,9 @@ export const getCachedToken = (): string | null => {
 // Set token directly (for re-hydration or keeping track)
 export const setCachedToken = (token: string) => {
   cachedAccessToken = token;
+  if (typeof window !== 'undefined') {
+    localStorage.setItem(ACCESS_TOKEN_KEY, token);
+  }
 };
 
 // Seed sample users to make user management lively and useful immediately

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { 
   initAuth, 
   googleSignIn, 
@@ -8,7 +8,9 @@ import {
   MEETING_ROOMS,
   handleFirestoreError,
   OperationType,
-  anonymousSignIn
+  anonymousSignIn,
+  setCachedToken,
+  getCachedToken
 } from './lib/firebase';
 import { 
   collection, 
@@ -36,7 +38,8 @@ import {
   deleteGoogleCalendarEvent, 
   updateGoogleCalendarEvent,
   sendEmailNotification,
-  formatThaiDateTime
+  formatThaiDateTime,
+  verifyGoogleCalendarToken
 } from './lib/googleCalendar';
 import Dashboard from './components/Dashboard';
 import CalendarView from './components/CalendarView';
@@ -65,7 +68,8 @@ import {
   Lock,
   Bell,
   Presentation,
-  Sparkles
+  Sparkles,
+  RefreshCw
 } from 'lucide-react';
 
 export default function App() {
@@ -75,6 +79,11 @@ export default function App() {
   const [needsAuth, setNeedsAuth] = useState(true);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
+
+  // API Status & Diagnostics States
+  const [apiStatus, setApiStatus] = useState<'checking' | 'connected' | 'disconnected'>('checking');
+  const [apiStatusDetail, setApiStatusDetail] = useState<string>('');
+  const [isCheckingApi, setIsCheckingApi] = useState(false);
 
   // Admin access permission check
   const isAdmin = userProfile?.role === 'admin' || user?.email === 'itsupport@ec.co.th';
@@ -114,49 +123,139 @@ export default function App() {
     title: 'ดำเนินการสำเร็จ'
   });
   const [logoutConfirmOpen, setLogoutConfirmOpen] = useState(false);
-  const [sessionExpiredAlert, setSessionExpiredAlert] = useState(false);
 
-  // 5-minute Inactivity Session Timeout
-  useEffect(() => {
-    if (!user || needsAuth) return;
-
-    let lastActivityTime = Date.now();
-    const INACTIVITY_LIMIT_MS = 5 * 60 * 1000; // 5 minutes
-
-    const resetActivity = () => {
-      lastActivityTime = Date.now();
-    };
-
-    const events = ['mousemove', 'mousedown', 'keydown', 'scroll', 'touchstart', 'click'];
-    events.forEach(event => {
-      window.addEventListener(event, resetActivity, { passive: true });
-    });
-
-    const checkInterval = setInterval(async () => {
-      const now = Date.now();
-      if (now - lastActivityTime >= INACTIVITY_LIMIT_MS) {
-        clearInterval(checkInterval);
-        // Automatically logout due to inactivity
-        setLogoutConfirmOpen(false);
-        setIsBookingOpen(false);
-        setIsImportOpen(false);
-        setSessionExpiredAlert(true);
-        localStorage.removeItem('anonymous_user_session');
-        await googleSignOut();
-        setUser(null);
-        setUserProfile(null);
-        setToken(null);
-        setNeedsAuth(true);
+  // Helper to fetch any active Admin's Google Access Token from Firestore
+  const getAdminGoogleToken = async (): Promise<string | null> => {
+    try {
+      const q = query(collection(db, 'users'), where('role', '==', 'admin'));
+      const qSnap = await getDocs(q);
+      for (const docSnap of qSnap.docs) {
+        const data = docSnap.data();
+        if (data.googleAccessToken && typeof data.googleAccessToken === 'string' && data.googleAccessToken.trim()) {
+          return data.googleAccessToken.trim();
+        }
       }
-    }, 5000);
+    } catch (err) {
+      console.error('Error fetching admin Google token:', err);
+    }
+    return null;
+  };
 
-    return () => {
-      clearInterval(checkInterval);
-      events.forEach(event => {
-        window.removeEventListener(event, resetActivity);
+  // Helper to resolve effective token across direct, cache, profile, or admin
+  const resolveEffectiveToken = async (
+    directToken?: string | null,
+    profile?: UserAccount | null
+  ): Promise<string> => {
+    if (directToken && directToken.trim()) return directToken.trim();
+    const cached = getCachedToken();
+    if (cached && cached.trim()) return cached.trim();
+    if (profile?.googleAccessToken && profile.googleAccessToken.trim()) return profile.googleAccessToken.trim();
+    const adminTok = await getAdminGoogleToken();
+    if (adminTok && adminTok.trim()) return adminTok.trim();
+    return '';
+  };
+
+  // Verifies Google Calendar API status and tests actual endpoint
+  const checkApiConnection = async (tokenToTest?: string | null) => {
+    setIsCheckingApi(true);
+    setApiStatus('checking');
+    try {
+      let activeTok = tokenToTest !== undefined ? tokenToTest : token;
+      if (!activeTok) {
+        activeTok = await resolveEffectiveToken(null, userProfile);
+      }
+
+      if (!activeTok) {
+        setApiStatus('disconnected');
+        setApiStatusDetail('ยังไม่มี Access Token สำหรับเชื่อมต่อ Google Calendar');
+        setIsCheckingApi(false);
+        return;
+      }
+
+      const res = await verifyGoogleCalendarToken(activeTok);
+      if (res.valid) {
+        setApiStatus('connected');
+        setApiStatusDetail('เชื่อมต่อระบบ Google Calendar สำเร็จ (พร้อมซิงค์อัตโนมัติ)');
+        if (activeTok !== token) {
+          setToken(activeTok);
+          setCachedToken(activeTok);
+        }
+      } else {
+        // Fallback: check if another admin in Firestore has a valid token
+        const adminTok = await getAdminGoogleToken();
+        if (adminTok && adminTok !== activeTok) {
+          const adminCheck = await verifyGoogleCalendarToken(adminTok);
+          if (adminCheck.valid) {
+            setApiStatus('connected');
+            setApiStatusDetail('เชื่อมต่อผ่านบัญชีผู้ดูแลระบบ (Admin) สำเร็จ');
+            setToken(adminTok);
+            setCachedToken(adminTok);
+            setIsCheckingApi(false);
+            return;
+          }
+        }
+        setApiStatus('disconnected');
+        setApiStatusDetail(res.error || 'Token หมดอายุหรือไม่ถูกต้อง');
+      }
+    } catch (err: any) {
+      setApiStatus('disconnected');
+      setApiStatusDetail(err?.message || 'ไม่สามารถติดต่อ Google Calendar API ได้');
+    } finally {
+      setIsCheckingApi(false);
+    }
+  };
+
+  // Reconnect / Authorize Google Calendar
+  const handleConnectGoogleCalendar = async () => {
+    setIsCheckingApi(true);
+    try {
+      const result = await googleSignIn();
+      if (result?.accessToken) {
+        const freshToken = result.accessToken;
+        setToken(freshToken);
+        setCachedToken(freshToken);
+
+        if (user) {
+          const userDocRef = doc(db, 'users', user.uid);
+          await updateDoc(userDocRef, {
+            googleAccessToken: freshToken,
+            lastLoginAt: new Date().toISOString()
+          });
+        }
+
+        const verifyRes = await verifyGoogleCalendarToken(freshToken);
+        if (verifyRes.valid) {
+          setApiStatus('connected');
+          setApiStatusDetail('เชื่อมต่อระบบ Google Calendar เรียบร้อยแล้ว');
+          setDeleteAlert({
+            isOpen: true,
+            type: 'success',
+            title: 'เชื่อมต่อ Google Calendar สำเร็จ',
+            message: 'ระบบเชื่อมต่อกับ Google Calendar API เรียบร้อยแล้ว สถานะเปลี่ยนเป็นสีเขียว (🟢) และพร้อมซิงค์กิจกรรมอัตโนมัติ'
+          });
+        } else {
+          setApiStatus('disconnected');
+          setApiStatusDetail(verifyRes.error || 'การเชื่อมต่อไม่สมบูรณ์');
+          setDeleteAlert({
+            isOpen: true,
+            type: 'warning',
+            title: 'เชื่อมต่อแล้ว แต่สิทธิ์ไม่ครบ',
+            message: verifyRes.error || 'Google Calendar API ตอบกลับข้อผิดพลาด กรุณาตรวจสอบสิทธิ์ของบัญชี'
+          });
+        }
+      }
+    } catch (err: any) {
+      console.error('Failed to connect Google Calendar:', err);
+      setDeleteAlert({
+        isOpen: true,
+        type: 'error',
+        title: 'การเชื่อมต่อผิดพลาด',
+        message: err?.message || 'ไม่สามารถเชื่อมต่อ Google Calendar ได้ กรุณาลองใหม่อีกครั้ง'
       });
-    };
-  }, [user, needsAuth]);
+    } finally {
+      setIsCheckingApi(false);
+    }
+  };
 
   // Listeners for Firebase Real-time syncing
   useEffect(() => {
@@ -178,8 +277,11 @@ export default function App() {
               displayName: profile.displayName || firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'พนักงาน'
             };
 
+            const effectiveToken = await resolveEffectiveToken(accessToken, profile);
+
             setUser(firebaseUser);
-            setToken(accessToken);
+            setToken(effectiveToken || null);
+            if (effectiveToken) setCachedToken(effectiveToken);
             setUserProfile(updatedProfile);
             setNeedsAuth(false);
 
@@ -188,9 +290,12 @@ export default function App() {
               lastLoginAt: nowIso
             };
             if (photoURL) updatePayload.photoURL = photoURL;
-            if (profile.role === 'admin' && accessToken) updatePayload.googleAccessToken = accessToken;
+            if (effectiveToken && (profile.role === 'admin' || firebaseUser.email === 'itsupport@ec.co.th')) {
+              updatePayload.googleAccessToken = effectiveToken;
+            }
             
             await updateDoc(userDocRef, updatePayload);
+            checkApiConnection(effectiveToken);
           } else {
             // Profile does not exist yet. Let's look up by email to see if they are pre-registered!
             const email = (firebaseUser.email || '').toLowerCase();
@@ -212,6 +317,8 @@ export default function App() {
                 lastLoginAt: nowIso,
                 photoURL: photoURL || foundProfile.photoURL
               };
+
+              const effectiveToken = await resolveEffectiveToken(accessToken, foundProfile);
               
               await setDoc(userDocRef, migratedProfile);
               if (oldDocId && oldDocId !== firebaseUser.uid) {
@@ -219,13 +326,15 @@ export default function App() {
               }
               
               setUser(firebaseUser);
-              setToken(accessToken);
+              setToken(effectiveToken || null);
+              if (effectiveToken) setCachedToken(effectiveToken);
               setUserProfile(migratedProfile);
               setNeedsAuth(false);
 
-              if (migratedProfile.role === 'admin' && accessToken) {
-                await updateDoc(userDocRef, { googleAccessToken: accessToken });
+              if (effectiveToken && (migratedProfile.role === 'admin' || isITSupport)) {
+                await updateDoc(userDocRef, { googleAccessToken: effectiveToken });
               }
+              checkApiConnection(effectiveToken);
             } else if (isITSupport) {
               // Auto-create IT Support Admin if they are not in DB
               const adminAccount: UserAccount = {
@@ -239,15 +348,19 @@ export default function App() {
                 photoURL
               };
               await setDoc(userDocRef, adminAccount);
+
+              const effectiveToken = await resolveEffectiveToken(accessToken, adminAccount);
               
               setUser(firebaseUser);
-              setToken(accessToken);
+              setToken(effectiveToken || null);
+              if (effectiveToken) setCachedToken(effectiveToken);
               setUserProfile(adminAccount);
               setNeedsAuth(false);
 
-              if (accessToken) {
-                await updateDoc(userDocRef, { googleAccessToken: accessToken });
+              if (effectiveToken) {
+                await updateDoc(userDocRef, { googleAccessToken: effectiveToken });
               }
+              checkApiConnection(effectiveToken);
             } else {
               // Auto-register new Google user into Employee Management (จัดการพนักงาน)
               const defaultDisplayName = firebaseUser.displayName || email.split('@')[0] || 'พนักงานใหม่';
@@ -268,21 +381,27 @@ export default function App() {
 
               await setDoc(userDocRef, newAccount);
 
+              const effectiveToken = await resolveEffectiveToken(accessToken, newAccount);
+
               setUser(firebaseUser);
-              setToken(accessToken);
+              setToken(effectiveToken || null);
+              if (effectiveToken) setCachedToken(effectiveToken);
               setUserProfile(newAccount);
               setNeedsAuth(false);
 
-              if (newAccount.role === 'admin' && accessToken) {
-                await updateDoc(userDocRef, { googleAccessToken: accessToken });
+              if (effectiveToken && (newAccount.role === 'admin' || isITSupport)) {
+                await updateDoc(userDocRef, { googleAccessToken: effectiveToken });
               }
+              checkApiConnection(effectiveToken);
             }
           }
         } catch (error) {
           console.error('Error fetching/migrating user profile on auth change:', error);
+          const effectiveToken = await resolveEffectiveToken(accessToken, null);
           setUser(firebaseUser);
-          setToken(accessToken);
+          setToken(effectiveToken || null);
           setNeedsAuth(false);
+          checkApiConnection(effectiveToken);
         }
       },
       () => {
@@ -291,12 +410,15 @@ export default function App() {
         setUserProfile(null);
         setToken(null);
         setNeedsAuth(true);
+        setApiStatus('disconnected');
+        setApiStatusDetail('ออกจากระบบแล้ว');
       }
     );
 
     return () => {
       unsubscribeAuth();
     };
+
   }, []);
 
   // Sync bookings and users only when authenticated
@@ -348,8 +470,10 @@ export default function App() {
       const result = await googleSignIn();
       if (result) {
         setToken(result.accessToken);
+        if (result.accessToken) setCachedToken(result.accessToken);
         setUser(result.user);
         setNeedsAuth(false);
+        checkApiConnection(result.accessToken);
 
         // Fetch their user profile
         try {
@@ -504,10 +628,11 @@ export default function App() {
     if (isAnnouncement || userProfile.role === 'admin') {
       newBooking.status = 'approved';
       
+      const activeToken = token || (await resolveEffectiveToken(null, userProfile));
       // Sync with Google Calendar if OAuth token is active
-      if (token) {
+      if (activeToken) {
         try {
-          const calendarResult = await createGoogleCalendarEvent(token, newBooking, newBookingDocRef.id);
+          const calendarResult = await createGoogleCalendarEvent(activeToken, newBooking, newBookingDocRef.id);
           newBooking.googleEventId = calendarResult.eventId;
           if (newBooking.meetingType === 'meet' && calendarResult.meetingLink) {
             newBooking.meetingLink = calendarResult.meetingLink;
@@ -697,9 +822,10 @@ export default function App() {
         };
 
         // Sync with Google Calendar if OAuth token is active & status is approved
-        if (newBooking.status === 'approved' && token) {
+        const activeToken = token || (await resolveEffectiveToken(null, userProfile));
+        if (newBooking.status === 'approved' && activeToken) {
           try {
-            const calendarResult = await createGoogleCalendarEvent(token, newBooking as any, newBookingDocRef.id);
+            const calendarResult = await createGoogleCalendarEvent(activeToken, newBooking as any, newBookingDocRef.id);
             newBooking.googleEventId = calendarResult.eventId;
             if (newBooking.meetingType === 'meet' && calendarResult.meetingLink) {
               newBooking.meetingLink = calendarResult.meetingLink;
@@ -856,23 +982,6 @@ export default function App() {
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `bookings/${bookingId}`);
     }
-  };
-
-  // Helper to fetch any active Admin's Google Access Token from Firestore
-  const getAdminGoogleToken = async (): Promise<string | null> => {
-    try {
-      const q = query(collection(db, 'users'), where('role', '==', 'admin'));
-      const qSnap = await getDocs(q);
-      for (const docSnap of qSnap.docs) {
-        const data = docSnap.data();
-        if (data.googleAccessToken) {
-          return data.googleAccessToken;
-        }
-      }
-    } catch (err) {
-      console.error('Error fetching admin Google token:', err);
-    }
-    return null;
   };
 
   // ADMIN REJECT BOOKING
@@ -1499,13 +1608,36 @@ export default function App() {
               <span className="font-bold text-slate-800 text-xs tracking-wide">Meeting Room EC</span>
             </div>
             
-            <button 
-              onClick={handleLogout}
-              className="p-1.5 bg-slate-50 border border-slate-200 text-rose-600 hover:bg-rose-50 rounded-lg transition-all"
-              title="ออกจากระบบ"
-            >
-              <LogOut className="h-3.5 w-3.5" />
-            </button>
+            <div className="flex items-center gap-2">
+              <div 
+                className={`h-2.5 w-2.5 rounded-full transition-all ${
+                  apiStatus === 'connected' 
+                    ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.7)]' 
+                    : apiStatus === 'checking' 
+                    ? 'bg-amber-400 animate-pulse' 
+                    : 'bg-rose-500 shadow-[0_0_8px_rgba(244,63,94,0.5)]'
+                }`}
+                title={apiStatusDetail || 'Google Calendar API Status'}
+              />
+              {apiStatus !== 'connected' && (
+                <button
+                  onClick={handleConnectGoogleCalendar}
+                  disabled={isCheckingApi}
+                  className="text-[10px] font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 px-2 py-0.5 rounded-lg border border-blue-200 flex items-center gap-1 cursor-pointer disabled:opacity-60"
+                  title="เชื่อมต่อ Google Calendar API"
+                >
+                  <RefreshCw className={`w-2.5 h-2.5 ${isCheckingApi ? 'animate-spin' : ''}`} />
+                  <span>ต่อ API</span>
+                </button>
+              )}
+              <button 
+                onClick={handleLogout}
+                className="p-1.5 bg-slate-50 border border-slate-200 text-rose-600 hover:bg-rose-50 rounded-lg transition-all"
+                title="ออกจากระบบ"
+              >
+                <LogOut className="h-3.5 w-3.5" />
+              </button>
+            </div>
           </div>
 
           {/* Mobile Navigation bar */}
@@ -1536,11 +1668,54 @@ export default function App() {
 
         {/* Top Header - Status indicator & Global quick booking matching reference */}
         <header className="hidden md:flex h-14 bg-white/90 backdrop-blur-xs border-b border-slate-200 px-8 items-center justify-between sticky top-0 z-10">
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-3">
             <div className="flex items-center space-x-2">
               <span className="text-xs font-semibold text-slate-500">Google Calendar API Status</span>
-              <div className={`h-2 w-2 rounded-full ${token ? 'bg-emerald-500' : 'bg-rose-500'}`} />
+              <div className="flex items-center space-x-1.5">
+                <div 
+                  className={`h-2.5 w-2.5 rounded-full transition-all ${
+                    apiStatus === 'connected' 
+                      ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.7)]' 
+                      : apiStatus === 'checking' 
+                      ? 'bg-amber-400 animate-pulse' 
+                      : 'bg-rose-500 shadow-[0_0_8px_rgba(244,63,94,0.5)]'
+                  }`} 
+                  title={apiStatusDetail}
+                />
+                <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full border flex items-center gap-1 ${
+                  apiStatus === 'connected'
+                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                    : apiStatus === 'checking'
+                    ? 'bg-amber-50 text-amber-700 border-amber-200'
+                    : 'bg-rose-50 text-rose-700 border-rose-200'
+                }`}>
+                  {apiStatus === 'connected' ? 'เชื่อมต่อแล้ว' : apiStatus === 'checking' ? 'กำลังตรวจสอบ...' : 'รอเชื่อมต่อ'}
+                </span>
+              </div>
             </div>
+
+            {apiStatus !== 'connected' ? (
+              <button
+                onClick={handleConnectGoogleCalendar}
+                disabled={isCheckingApi}
+                className="text-xs font-semibold text-blue-700 hover:text-blue-800 bg-blue-50 hover:bg-blue-100 px-2.5 py-1 rounded-xl border border-blue-200 shadow-2xs transition-all flex items-center space-x-1 cursor-pointer disabled:opacity-60"
+                title="คลิกเพื่อเชื่อมต่อสิทธิ์ Google Calendar และเริ่มการซิงค์"
+              >
+                <RefreshCw className={`w-3 h-3 ${isCheckingApi ? 'animate-spin' : ''}`} />
+                <span>{isCheckingApi ? 'กำลังเชื่อมต่อ...' : 'เชื่อมต่อ API'}</span>
+              </button>
+            ) : (
+              <button
+                onClick={() => checkApiConnection(token)}
+                disabled={isCheckingApi}
+                className="text-[11px] text-slate-400 hover:text-slate-600 p-1 rounded-lg hover:bg-slate-100 transition-colors flex items-center gap-1 cursor-pointer"
+                title="ทดสอบการเชื่อมต่อ API อีกครั้ง"
+              >
+                <RefreshCw className={`w-3 h-3 ${isCheckingApi ? 'animate-spin text-slate-600' : ''}`} />
+                <span className="hidden lg:inline text-[10px]">ทดสอบ API</span>
+              </button>
+            )}
+
             <div className="h-3.5 w-[1px] bg-slate-200" />
             <span className="text-xs font-semibold text-slate-600 bg-slate-100 px-2.5 py-0.5 rounded-full border border-slate-200">
               สิทธิ์บัญชี: {isAdmin ? 'ผู้ดูแลระบบ (Admin)' : 'ผู้ใช้งานทั่วไป'}
@@ -1788,29 +1963,6 @@ export default function App() {
                 ออกจากระบบ
               </button>
             </div>
-          </div>
-        </div>
-      )}
-
-      {/* Session Expired Inactivity Notice Modal */}
-      {sessionExpiredAlert && (
-        <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fade-in">
-          <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-2xl max-w-sm w-full space-y-4 animate-in scale-in duration-200 text-center">
-            <div className="w-12 h-12 rounded-full bg-amber-50 border border-amber-200 text-amber-600 flex items-center justify-center mx-auto">
-              <Clock className="w-6 h-6" />
-            </div>
-            <div className="space-y-1.5">
-              <h3 className="font-bold text-slate-800 text-base">เซสชันหมดอายุ (Session Timeout)</h3>
-              <p className="text-xs text-slate-500 leading-relaxed">
-                ระบบได้ออกจากระบบอัตโนมัติเนื่องจากไม่มีการเคลื่อนไหวเกิน 5 นาที เพื่อความปลอดภัยของข้อมูล
-              </p>
-            </div>
-            <button
-              onClick={() => setSessionExpiredAlert(false)}
-              className="w-full py-2.5 px-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-indigo-100 cursor-pointer"
-            >
-              รับทราบ / เข้าสู่ระบบใหม่
-            </button>
           </div>
         </div>
       )}

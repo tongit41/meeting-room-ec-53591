@@ -395,3 +395,34 @@ export async function sendEmailNotification(
     return false;
   }
 }
+
+/**
+ * Checks and verifies if a Google Calendar Access Token is active and authorized
+ */
+export async function verifyGoogleCalendarToken(accessToken: string): Promise<{ valid: boolean; status: number; error?: string }> {
+  if (!accessToken || !accessToken.trim()) {
+    return { valid: false, status: 401, error: 'ยังไม่มี Access Token' };
+  }
+  try {
+    const res = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList?maxResults=1', {
+      headers: {
+        'Authorization': `Bearer ${accessToken}`
+      }
+    });
+    if (res.ok) {
+      return { valid: true, status: res.status };
+    }
+    let errMessage = `HTTP ${res.status}`;
+    try {
+      const errJson = await res.json();
+      if (errJson?.error?.message) {
+        errMessage = errJson.error.message;
+      }
+    } catch {
+      // fallback
+    }
+    return { valid: false, status: res.status, error: errMessage };
+  } catch (err: any) {
+    return { valid: false, status: 0, error: err?.message || 'Network error' };
+  }
+}
