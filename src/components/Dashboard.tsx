@@ -6,7 +6,11 @@ import {
   Calendar, 
   Clock, 
   CheckCircle, 
+  CheckCircle2,
   AlertCircle, 
+  Bell,
+  BellRing,
+  X,
   Play, 
   Plus, 
   Sliders,
@@ -20,11 +24,19 @@ import {
   Star,
   Megaphone,
   MapPinOff,
-  Plane
+  Plane,
+  Mail
 } from 'lucide-react';
 import { Booking, MeetingRoom, RoomId } from '../types';
 import { MEETING_ROOMS } from '../lib/firebase';
 import { canViewBookingDetails, isKeyAttendee, sortAttendeesByPriority } from '../lib/permissions';
+import { formatThaiDateRange } from '../lib/googleCalendar';
+import { 
+  getNotificationPermission, 
+  requestNotificationPermission, 
+  triggerMeetingPushNotification, 
+  NotificationPermissionStatus 
+} from '../lib/pushNotification';
 
 interface DashboardProps {
   bookings: Booking[];
@@ -37,6 +49,7 @@ interface DashboardProps {
   onDeleteBooking?: (bookingId: string) => void;
   onEditBooking?: (booking: Booking) => void;
   onOpenImportModal?: () => void;
+  onSendReminderEmail?: (booking: Booking) => Promise<boolean>;
 }
 
 export default function Dashboard({
@@ -49,15 +62,74 @@ export default function Dashboard({
   onSelectTab,
   onDeleteBooking,
   onEditBooking,
-  onOpenImportModal
+  onOpenImportModal,
+  onSendReminderEmail
 }: DashboardProps) {
   const [now, setNow] = useState(new Date());
+  const [notificationPerm, setNotificationPerm] = useState<NotificationPermissionStatus>('default');
+  const [dismissedAlertIds, setDismissedAlertIds] = useState<string[]>([]);
+  const [sendingEmailBookingId, setSendingEmailBookingId] = useState<string | null>(null);
 
   // Keep clock running
   useEffect(() => {
     const timer = setInterval(() => setNow(new Date()), 1000);
     return () => clearInterval(timer);
   }, []);
+
+  // Check push notification permission on mount
+  useEffect(() => {
+    setNotificationPerm(getNotificationPermission());
+  }, []);
+
+  const handleEnablePushNotifications = async () => {
+    const res = await requestNotificationPermission();
+    setNotificationPerm(res);
+  };
+
+  // 15-Minute Upcoming Meetings Check
+  const nowMs = now.getTime();
+  const upcoming15mBookings = bookings.filter(b => {
+    if (b.status !== 'approved' || b.entryType === 'announcement') return false;
+    const startMs = new Date(b.startTime).getTime();
+    const endMs = new Date(b.endTime).getTime();
+    if (isNaN(startMs) || isNaN(endMs)) return false;
+
+    const diffMs = startMs - nowMs;
+    // 15 minutes before start (diffMs <= 15 * 60 * 1000) up to 5 minutes after start (diffMs >= -5 * 60 * 1000)
+    return diffMs <= 15 * 60 * 1000 && diffMs >= -5 * 60 * 1000 && endMs > nowMs;
+  }).sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime());
+
+  // Show alert banner ONLY for user accounts involved in that meeting (creator or attendee)
+  // Users NOT involved in the meeting will NOT see the alert banner!
+  const userRelevant15mBookings = upcoming15mBookings.filter(b => {
+    if (!currentUserEmail) return false;
+    const userEmailLower = currentUserEmail.trim().toLowerCase();
+    const isCreator = b.creatorEmail && b.creatorEmail.trim().toLowerCase() === userEmailLower;
+    const isAttendee = b.attendees && b.attendees.some(a => a.email && a.email.trim().toLowerCase() === userEmailLower);
+    return isCreator || isAttendee;
+  });
+
+  // Display alert banner ONLY for accounts involved in that meeting
+  const displayAlertBookings = userRelevant15mBookings
+    .filter(b => !dismissedAlertIds.includes(b.id));
+
+  // Automatically trigger Desktop Push Notification ONLY for involved user accounts
+  useEffect(() => {
+    if (!currentUserEmail) return;
+    const userEmailLower = currentUserEmail.trim().toLowerCase();
+
+    userRelevant15mBookings.forEach(b => {
+      const isCreator = b.creatorEmail && b.creatorEmail.trim().toLowerCase() === userEmailLower;
+      const isAttendee = b.attendees && b.attendees.some(a => a.email && a.email.trim().toLowerCase() === userEmailLower);
+
+      if (isCreator || isAttendee) {
+        const startMs = new Date(b.startTime).getTime();
+        const diffMs = startMs - now.getTime();
+        const minutesLeft = Math.max(0, Math.ceil(diffMs / 60000));
+        triggerMeetingPushNotification(b, minutesLeft);
+      }
+    });
+  }, [userRelevant15mBookings, now, currentUserEmail]);
 
   const getThaiDateString = (date: Date) => {
     return date.toLocaleDateString('th-TH', {
@@ -112,64 +184,237 @@ export default function Dashboard({
 
   // Helper to determine room status at current moment
   const getRoomStatus = (roomId: RoomId) => {
-    const currentTimeStr = now.toISOString();
+    const nowMs = now.getTime();
     
     // Check if there is an approved booking happening right now
     const activeBooking = bookings.find(b => {
-      return (
-        b.roomId === roomId &&
-        b.status === 'approved' &&
-        currentTimeStr >= b.startTime &&
-        currentTimeStr <= b.endTime
-      );
+      if (b.roomId !== roomId || b.status !== 'approved') return false;
+      const startMs = new Date(b.startTime).getTime();
+      const endMs = new Date(b.endTime).getTime();
+      if (!isNaN(startMs) && !isNaN(endMs)) {
+        return nowMs >= startMs && nowMs <= endMs;
+      }
+      const currentTimeStr = now.toISOString();
+      return currentTimeStr >= b.startTime && currentTimeStr <= b.endTime;
     });
 
     if (activeBooking) {
       return {
         status: 'occupied' as const,
-        label: 'กำลังใช้งาน',
-        color: 'text-rose-600 bg-rose-50 border-rose-200',
-        badgeColor: 'bg-rose-500 animate-pulse',
+        label: 'ติดประชุม',
+        color: 'text-rose-700 bg-rose-50 border-rose-200',
+        badgeColor: 'bg-rose-500',
+        pingColor: 'bg-rose-400',
+        cardBorder: 'border-rose-300 ring-2 ring-rose-400/25 shadow-sm',
         booking: activeBooking
       };
     }
 
-    // Check if there is a pending booking happening right now or coming up in next 30 mins
+    // Check if there is a pending booking happening right now
     const pendingBooking = bookings.find(b => {
-      return (
-        b.roomId === roomId &&
-        b.status === 'pending' &&
-        currentTimeStr >= b.startTime &&
-        currentTimeStr <= b.endTime
-      );
+      if (b.roomId !== roomId || b.status !== 'pending') return false;
+      const startMs = new Date(b.startTime).getTime();
+      const endMs = new Date(b.endTime).getTime();
+      if (!isNaN(startMs) && !isNaN(endMs)) {
+        return nowMs >= startMs && nowMs <= endMs;
+      }
+      const currentTimeStr = now.toISOString();
+      return currentTimeStr >= b.startTime && currentTimeStr <= b.endTime;
     });
 
     if (pendingBooking) {
       return {
         status: 'pending' as const,
-        label: 'รออนุมัติการจอง',
-        color: 'text-amber-600 bg-amber-50 border-amber-200',
+        label: 'รออนุมัติ',
+        color: 'text-amber-700 bg-amber-50 border-amber-200',
         badgeColor: 'bg-amber-500',
+        pingColor: 'bg-amber-400',
+        cardBorder: 'border-amber-300 ring-2 ring-amber-400/25 shadow-sm',
         booking: pendingBooking
       };
     }
 
     // Check for next upcoming booking today
     const nextBooking = bookings
-      .filter(b => b.roomId === roomId && b.status === 'approved' && b.startTime > currentTimeStr)
-      .sort((a, b) => a.startTime.localeCompare(b.startTime))[0];
+      .filter(b => {
+        if (b.roomId !== roomId || b.status !== 'approved') return false;
+        const startMs = new Date(b.startTime).getTime();
+        if (!isNaN(startMs)) {
+          return startMs > nowMs;
+        }
+        return b.startTime > now.toISOString();
+      })
+      .sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime())[0];
 
     return {
       status: 'available' as const,
       label: 'ว่าง',
-      color: 'text-emerald-600 bg-emerald-50 border-emerald-200',
+      color: 'text-emerald-700 bg-emerald-50 border-emerald-200',
       badgeColor: 'bg-emerald-500',
+      pingColor: 'bg-emerald-400',
+      cardBorder: 'border-slate-200/90 hover:border-emerald-300 hover:shadow-sm',
       nextBooking
     };
   };
 
   return (
     <div className="space-y-8" id="dashboard-main">
+      {/* 15-Minute Upcoming Meeting Alert Banner */}
+      {displayAlertBookings.length > 0 && (
+        <div className="space-y-3">
+          {displayAlertBookings.map(b => {
+            const startMs = new Date(b.startTime).getTime();
+            const diffMs = startMs - now.getTime();
+            const isStarted = diffMs <= 0;
+            const minutesLeft = Math.max(0, Math.floor(diffMs / 60000));
+            const secondsLeft = Math.max(0, Math.floor((diffMs % 60000) / 1000));
+            const userEmailLower = (currentUserEmail || '').trim().toLowerCase();
+            const isMyBooking = (b.creatorEmail && b.creatorEmail.trim().toLowerCase() === userEmailLower) || 
+              (b.attendees && b.attendees.some(a => a.email && a.email.trim().toLowerCase() === userEmailLower));
+
+            const formatShortTime = (dStr: string) => {
+              try {
+                return new Date(dStr).toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
+              } catch {
+                return dStr;
+              }
+            };
+
+            return (
+              <div 
+                key={b.id}
+                className="relative overflow-hidden rounded-2xl border border-amber-300 bg-gradient-to-r from-amber-500/15 via-orange-500/10 to-amber-500/5 p-4 sm:p-5 shadow-[0_4px_20px_-2px_rgba(245,158,11,0.2)] ring-2 ring-amber-400/30 transition-all"
+              >
+                {/* Subtle top pulsing bar */}
+                <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-amber-400 via-orange-500 to-amber-400 animate-pulse" />
+
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                  <div className="flex items-start space-x-3.5 flex-1">
+                    {/* Pulsing Bell Icon with animated ripple */}
+                    <div className="relative flex items-center justify-center p-2.5 rounded-xl bg-amber-500 text-white shadow-md shrink-0 mt-0.5">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75" />
+                      <BellRing className="w-5 h-5 relative z-1 animate-pulse" />
+                    </div>
+
+                    <div className="space-y-1.5 flex-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        {/* Countdown Badge */}
+                        <span className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-full text-xs font-bold bg-amber-600 text-white shadow-xs">
+                          <span className="h-2 w-2 rounded-full bg-white animate-ping" />
+                          <span>
+                            {isStarted 
+                              ? '🟢 การประชุมกำลังเริ่มต้นขึ้นแล้ว!' 
+                              : `⏰ จะเริ่มในอีก ${minutesLeft} นาที ${secondsLeft} วินาที`}
+                          </span>
+                        </span>
+
+                        {/* Room Badge */}
+                        <span className="text-xs font-bold px-2.5 py-0.5 rounded-md bg-white border border-amber-200 text-amber-900 shadow-2xs">
+                          {b.roomName ? b.roomName.split(' (')[0] : 'ไม่ระบุห้อง'}
+                        </span>
+
+                        {isMyBooking && (
+                          <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-blue-100 text-blue-800 border border-blue-200">
+                            การประชุมของคุณ
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="flex items-baseline space-x-2 flex-wrap">
+                        <h3 className="text-base sm:text-lg font-bold text-slate-900 leading-snug">
+                          {b.title}
+                        </h3>
+                        <span className="text-xs text-slate-500 font-mono">
+                          ({formatShortTime(b.startTime)} - {formatShortTime(b.endTime)} น.)
+                        </span>
+                      </div>
+
+                      <div className="flex items-center gap-2 text-xs text-slate-600 flex-wrap">
+                        <span>ผู้จัด: <strong className="text-slate-800">{b.creatorName}</strong></span>
+                        {b.attendees && b.attendees.length > 0 && (
+                          <>
+                            <span className="text-slate-300">•</span>
+                            <span>ผู้เข้าร่วม {b.attendees.length} คน</span>
+                          </>
+                        )}
+                        {b.description && (
+                          <>
+                            <span className="text-slate-300">•</span>
+                            <span className="line-clamp-1 italic text-slate-500">{b.description}</span>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Actions column */}
+                  <div className="flex items-center space-x-2 shrink-0 self-end md:self-center flex-wrap">
+                    {/* Push notification permission prompt button if not yet enabled */}
+                    {notificationPerm === 'default' && (
+                      <button
+                        onClick={handleEnablePushNotifications}
+                        className="inline-flex items-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 shadow-2xs transition-all cursor-pointer"
+                        title="เปิดการแจ้งเตือนเด้งเตือนบนหน้าจอเบราว์เซอร์"
+                      >
+                        <Bell className="w-3.5 h-3.5 text-amber-600" />
+                        <span>เปิดแจ้งเตือนบนจอ</span>
+                      </button>
+                    )}
+
+                    {/* Email reminder status / action */}
+                    {b.reminder15mSent ? (
+                      <span className="inline-flex items-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-2xs">
+                        <Mail className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                        <span>แจ้งเตือนอีเมลแล้ว</span>
+                      </span>
+                    ) : onSendReminderEmail ? (
+                      <button
+                        onClick={async () => {
+                          setSendingEmailBookingId(b.id);
+                          try {
+                            await onSendReminderEmail(b);
+                          } finally {
+                            setSendingEmailBookingId(null);
+                          }
+                        }}
+                        disabled={sendingEmailBookingId === b.id}
+                        className="inline-flex items-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-white hover:bg-amber-50 text-amber-800 border border-amber-300 shadow-2xs transition-all cursor-pointer disabled:opacity-60"
+                        title="ส่งอีเมลแจ้งเตือนล่วงหน้า 15 นาทีไปยังผู้จัดและผู้เข้าร่วมประชุม"
+                      >
+                        <Mail className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                        <span>{sendingEmailBookingId === b.id ? 'กำลังส่งอีเมล...' : 'ส่งอีเมลเตือนผู้เกี่ยวข้อง'}</span>
+                      </button>
+                    ) : null}
+
+                    {/* Quick video link button */}
+                    {b.meetingLink && (
+                      <a
+                        href={b.meetingLink}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center space-x-1.5 px-4 py-2 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white shadow-md hover:shadow-lg transition-all cursor-pointer"
+                      >
+                        <Video className="w-4 h-4 shrink-0" />
+                        <span>เข้าสายประชุมทันที</span>
+                      </a>
+                    )}
+
+                    {/* Dismiss button */}
+                    <button
+                      onClick={() => setDismissedAlertIds(prev => [...prev, b.id])}
+                      className="p-2 rounded-xl text-slate-400 hover:text-slate-600 hover:bg-white/80 transition-colors cursor-pointer"
+                      title="ปิดการแจ้งเตือนชั่วคราว"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
       {/* Upper Section: Clean Warm Light Welcome banner & Realtime clock */}
       <div className="relative overflow-hidden bg-slate-100/60 backdrop-blur-xs p-6 sm:p-7 rounded-2xl border border-slate-200 shadow-[0_4px_20px_-2px_rgba(15,23,42,0.05)] flex flex-col md:flex-row md:items-center md:justify-between gap-6">
         {/* Soft decorative warm/blue background subtle gradient */}
@@ -401,6 +646,51 @@ export default function Dashboard({
           </div>
         </div>
 
+        {/* Real-time Quick Status Overview Bar */}
+        <div className="bg-white p-3.5 sm:p-4 rounded-xl border border-slate-200 shadow-2xs flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center space-x-2 text-xs font-semibold text-slate-700">
+            <span className="flex h-2.5 w-2.5 relative">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+            </span>
+            <span>สถานะห้องปัจจุบัน (Real-time):</span>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            {rooms.map(room => {
+              const info = getRoomStatus(room.id);
+              const isRoomAvail = info.status === 'available';
+              const isRoomOccupied = info.status === 'occupied';
+
+              return (
+                <div 
+                  key={room.id}
+                  className={`inline-flex items-center space-x-2 px-3 py-1.5 rounded-lg border text-xs font-semibold transition-all ${
+                    isRoomOccupied 
+                      ? 'bg-rose-50 text-rose-700 border-rose-200 shadow-2xs' 
+                      : info.status === 'pending'
+                      ? 'bg-amber-50 text-amber-700 border-amber-200 shadow-2xs'
+                      : 'bg-emerald-50 text-emerald-700 border-emerald-200 shadow-2xs'
+                  }`}
+                >
+                  <span className={`h-2 w-2 rounded-full ${info.badgeColor} ${isRoomOccupied ? 'animate-pulse' : ''}`} />
+                  <span className="text-slate-800">{room.name ? room.name.split(' (')[0] : room.id}:</span>
+                  <span className="flex items-center gap-1 font-bold">
+                    {isRoomAvail ? (
+                      <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600 inline shrink-0" />
+                    ) : isRoomOccupied ? (
+                      <AlertCircle className="h-3.5 w-3.5 text-rose-600 inline shrink-0" />
+                    ) : (
+                      <Clock className="h-3.5 w-3.5 text-amber-600 inline shrink-0" />
+                    )}
+                    <span>{info.label}</span>
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
           {rooms.map(room => {
             const roomInfo = getRoomStatus(room.id);
@@ -411,17 +701,44 @@ export default function Dashboard({
             return (
               <div 
                 key={room.id}
-                className={`bg-white rounded-2xl border transition-all duration-200 shadow-2xs hover:shadow-sm flex flex-col h-full ${
-                  isOccupied ? 'border-sky-300 ring-2 ring-sky-400/30' : 'border-slate-200/80'
-                }`}
+                className={`bg-white rounded-2xl border transition-all duration-200 flex flex-col h-full ${roomInfo.cardBorder}`}
                 id={`room-card-${room.id}`}
               >
-                {/* Room Header matching light clean aesthetic */}
-                <div className="p-4 sm:p-5 rounded-t-2xl border-b border-slate-100 bg-slate-50/40 flex items-center justify-between">
-                  <h3 className="font-bold text-slate-800 text-base">{room.name ? room.name.split(' (')[0] : room.id}</h3>
-                  {/* Status Badge */}
-                  <div className={`flex items-center space-x-1.5 px-3 py-1 rounded-full border text-xs font-bold ${roomInfo.color}`}>
-                    <span className={`h-2 w-2 rounded-full ${roomInfo.badgeColor}`} />
+                {/* Room Header with Real-time Status and Colored Icon */}
+                <div className={`p-4 sm:p-5 rounded-t-2xl border-b transition-colors flex items-center justify-between ${
+                  isOccupied 
+                    ? 'bg-rose-50/40 border-rose-100' 
+                    : isPending 
+                    ? 'bg-amber-50/40 border-amber-100' 
+                    : 'bg-emerald-50/30 border-slate-100'
+                }`}>
+                  <div className="flex items-center space-x-2.5">
+                    {/* Live pulse dot indicator */}
+                    <div className="relative flex items-center justify-center">
+                      <span className={`animate-ping absolute inline-flex h-3.5 w-3.5 rounded-full opacity-75 ${roomInfo.pingColor}`} />
+                      <span className={`relative inline-flex rounded-full h-2.5 w-2.5 ${roomInfo.badgeColor}`} />
+                    </div>
+                    <div>
+                      <h3 className="font-bold text-slate-800 text-base leading-tight">
+                        {room.name ? room.name.split(' (')[0] : room.id}
+                      </h3>
+                      {room.name && room.name.includes('(') && (
+                        <p className="text-[11px] text-slate-400 font-medium">
+                          {room.name.match(/\((.*?)\)/)?.[0]}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Status Badge with Color & Icon: เขียวว่าง, แดงติดประชุม */}
+                  <div className={`flex items-center space-x-1.5 px-3 py-1 rounded-full border text-xs font-bold shadow-2xs ${roomInfo.color}`}>
+                    {isAvail ? (
+                      <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600 shrink-0" />
+                    ) : isOccupied ? (
+                      <AlertCircle className="h-3.5 w-3.5 text-rose-600 shrink-0" />
+                    ) : (
+                      <Clock className="h-3.5 w-3.5 text-amber-600 shrink-0" />
+                    )}
                     <span>{roomInfo.label}</span>
                   </div>
                 </div>
@@ -432,8 +749,11 @@ export default function Dashboard({
                     const canView = canViewBookingDetails(roomInfo.booking, currentUserEmail, isAdmin);
                     return (
                       <div className="space-y-2.5">
-                        <div className="text-[11px] font-bold text-rose-500 uppercase tracking-wider flex items-center justify-between">
-                          <span>กำลังใช้งานในขณะนี้</span>
+                        <div className="text-[11px] font-bold text-rose-600 uppercase tracking-wider flex items-center justify-between">
+                          <span className="flex items-center space-x-1">
+                            <AlertCircle className="h-3 w-3" />
+                            <span>ติดประชุมในขณะนี้</span>
+                          </span>
                           {roomInfo.booking.isConfidential && (
                             <span className="flex items-center space-x-1 text-[10px] text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
                               <Lock className="h-3 w-3" />
@@ -557,6 +877,11 @@ export default function Dashboard({
 
                   {isAvail && (
                     <div className="space-y-3 flex-1 flex flex-col justify-center">
+                      <div className="flex items-center space-x-1.5 text-[11px] font-bold text-emerald-600 uppercase tracking-wider">
+                        <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
+                        <span>ห้องว่าง พร้อมใช้งานได้ทันที</span>
+                      </div>
+
                       {roomInfo.nextBooking ? (() => {
                         const canView = canViewBookingDetails(roomInfo.nextBooking, currentUserEmail, isAdmin);
                         return (
@@ -589,9 +914,12 @@ export default function Dashboard({
                           </div>
                         );
                       })() : (
-                        <div className="text-center py-6 text-slate-400 space-y-1.5">
-                          <div className="text-sm">ไม่มีคิวจองแล้วในวันนี้</div>
-                          <p className="text-[11px]">ห้องประชุมว่างตลอดทั้งวัน สามารถใช้งานได้ทันที</p>
+                        <div className="text-center py-5 text-slate-500 space-y-1.5 bg-emerald-50/30 rounded-xl border border-dashed border-emerald-200/60 p-3">
+                          <div className="text-xs font-bold text-emerald-700 flex items-center justify-center gap-1.5">
+                            <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+                            <span>ไม่มีคิวจองในวันนี้</span>
+                          </div>
+                          <p className="text-[11px] text-slate-500">ห้องว่างตลอดทั้งวัน สามารถใช้งานได้ทันที</p>
                         </div>
                       )}
                     </div>
@@ -604,7 +932,7 @@ export default function Dashboard({
                       className={`w-full py-2 px-4 rounded-xl text-xs font-semibold tracking-wide transition-all border flex items-center justify-center space-x-1.5 ${
                         isOccupied 
                         ? 'bg-slate-50 hover:bg-slate-100 text-slate-600 border-slate-200' 
-                        : 'bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border-indigo-200'
+                        : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border-emerald-200'
                       }`}
                     >
                       <Plus className="h-3.5 w-3.5" />
@@ -775,10 +1103,10 @@ export default function Dashboard({
                             <button
                               onClick={() => onDeleteBooking(b.id)}
                               className="inline-flex items-center space-x-1 text-xs px-2.5 py-1.5 rounded-md border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 font-semibold transition-all cursor-pointer"
-                              title="ลบกิจกรรมการใช้ห้องประชุม"
+                              title="ยกเลิกรายการจองห้องประชุมนี้"
                             >
                               <Trash2 className="h-3.5 w-3.5 shrink-0" />
-                              <span>ลบ</span>
+                              <span>ยกเลิก</span>
                             </button>
                           )}
                         </td>

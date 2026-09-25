@@ -53,6 +53,9 @@ export interface Booking {
   approvedBy?: string;
   rejectedReason?: string;
   isConfidential?: boolean;
+  approvalKey?: string; // Secret key for direct one-click approve/reject via email
+  reminder15mSent?: boolean; // Flag indicating 15m reminder email has been dispatched
+  reminder15mSentAt?: string;
 
   // Announcement & Notice fields
   entryType?: EntryType; // 'meeting' (default) or 'announcement'

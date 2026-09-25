@@ -90,6 +90,27 @@
         }
       },
       "required": ["roomId", "title", "startTime", "endTime", "meetingType", "creatorEmail", "creatorName", "status", "createdAt"]
+    },
+    "SystemSettings": {
+      "title": "SystemSettings",
+      "description": "System settings and shared API integration configuration",
+      "type": "object",
+      "properties": {
+        "accessToken": {
+          "type": "string",
+          "description": "Shared Google Calendar API access token"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedBy": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        }
+      }
     }
   },
   "firestore": {
@@ -104,6 +125,12 @@
         "$ref": "#/entities/Booking"
       },
       "description": "Bookings records"
+    },
+    "/system_settings/{settingId}": {
+      "schema": {
+        "$ref": "#/entities/SystemSettings"
+      },
+      "description": "Shared system settings and API credentials"
     }
   }
 }

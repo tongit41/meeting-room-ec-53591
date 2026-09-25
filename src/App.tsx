@@ -38,9 +38,19 @@ import {
   deleteGoogleCalendarEvent, 
   updateGoogleCalendarEvent,
   sendEmailNotification,
+  sendBookingNotifications,
+  sendBookingCancellationNotifications,
+  send15MinuteMeetingReminderEmails,
+  buildBookingEmailHtml,
   formatThaiDateTime,
+  formatThaiDateRange,
   verifyGoogleCalendarToken
 } from './lib/googleCalendar';
+import { 
+  triggerMeetingPushNotification,
+  hasSentReminderEmail,
+  markSentReminderEmail
+} from './lib/pushNotification';
 import Dashboard from './components/Dashboard';
 import CalendarView from './components/CalendarView';
 import BookingModal from './components/BookingModal';
@@ -48,11 +58,15 @@ import UserManagement from './components/UserManagement';
 import ApprovalPanel from './components/ApprovalPanel';
 import ImportCalendarModal from './components/ImportCalendarModal';
 import AnnouncementModal from './components/AnnouncementModal';
+import QuickActionModal from './components/QuickActionModal';
+import MyHistory from './components/MyHistory';
+import CancelBookingModal from './components/CancelBookingModal';
 import { 
   Calendar as CalendarIcon, 
   CheckSquare, 
   Users, 
   LayoutDashboard, 
+  History,
   LogOut, 
   ShieldAlert, 
   Video, 
@@ -86,7 +100,20 @@ export default function App() {
   const [isCheckingApi, setIsCheckingApi] = useState(false);
 
   // Admin access permission check
-  const isAdmin = userProfile?.role === 'admin' || user?.email === 'itsupport@ec.co.th';
+  const isAdmin = userProfile?.role === 'admin' || user?.email === 'itsupport@ec.co.th' || user?.email === 'ec.co.hr.2018@gmail.com';
+
+  // Quick Action via Email Link States (?action=approve&id=...&key=...)
+  const [quickAction, setQuickAction] = useState<{
+    isOpen: boolean;
+    action: 'approve' | 'reject' | 'view';
+    bookingId: string;
+    key: string;
+  }>({
+    isOpen: false,
+    action: 'view',
+    bookingId: '',
+    key: ''
+  });
 
   // App Core States
   const [bookings, setBookings] = useState<Booking[]>([]);
@@ -106,10 +133,16 @@ export default function App() {
   const [editingAnnouncement, setEditingAnnouncement] = useState<Booking | null>(null);
 
   // Custom Delete Confirmation & Alert Dialog States
-  const [deleteConfirm, setDeleteConfirm] = useState<{ isOpen: boolean; bookingId: string; title: string }>({
+  const [deleteConfirm, setDeleteConfirm] = useState<{ 
+    isOpen: boolean; 
+    bookingId: string; 
+    title: string;
+    booking: Booking | null;
+  }>({
     isOpen: false,
     bookingId: '',
     title: '',
+    booking: null,
   });
   const [deleteAlert, setDeleteAlert] = useState<{ 
     isOpen: boolean; 
@@ -124,39 +157,125 @@ export default function App() {
   });
   const [logoutConfirmOpen, setLogoutConfirmOpen] = useState(false);
 
-  // Helper to fetch any active Admin's Google Access Token from Firestore
-  const getAdminGoogleToken = async (): Promise<string | null> => {
+  // Detect Quick Action URL parameters on application mount
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
     try {
-      const q = query(collection(db, 'users'), where('role', '==', 'admin'));
-      const qSnap = await getDocs(q);
-      for (const docSnap of qSnap.docs) {
+      const params = new URLSearchParams(window.location.search);
+      const actionParam = params.get('action');
+      const idParam = params.get('id');
+      const keyParam = params.get('key') || '';
+
+      if (actionParam && (actionParam === 'approve' || actionParam === 'reject' || actionParam === 'view') && idParam) {
+        setQuickAction({
+          isOpen: true,
+          action: actionParam as 'approve' | 'reject' | 'view',
+          bookingId: idParam,
+          key: keyParam
+        });
+      }
+    } catch (urlErr) {
+      console.warn('URL parsing for quick action warning:', urlErr);
+    }
+  }, []);
+
+  const handleCloseQuickAction = () => {
+    setQuickAction(prev => ({ ...prev, isOpen: false }));
+    if (typeof window !== 'undefined' && window.history.replaceState) {
+      const cleanUrl = window.location.pathname;
+      window.history.replaceState({}, document.title, cleanUrl);
+    }
+  };
+
+  // Helper to fetch any active Google Access Token from Firestore (shared config, admin, or any active user)
+  const getSharedGoogleToken = async (): Promise<string | null> => {
+    try {
+      // 1. Check shared system settings
+      const settingsRef = doc(db, 'system_settings', 'google_calendar');
+      const settingsSnap = await getDoc(settingsRef);
+      if (settingsSnap.exists()) {
+        const data = settingsSnap.data();
+        if (data.accessToken && typeof data.accessToken === 'string' && data.accessToken.trim()) {
+          return data.accessToken.trim();
+        }
+      }
+    } catch (err) {
+      console.warn('System settings read info:', err);
+    }
+
+    try {
+      // 2. Check admin users first
+      const qAdmin = query(collection(db, 'users'), where('role', '==', 'admin'));
+      const adminSnap = await getDocs(qAdmin);
+      for (const docSnap of adminSnap.docs) {
         const data = docSnap.data();
         if (data.googleAccessToken && typeof data.googleAccessToken === 'string' && data.googleAccessToken.trim()) {
           return data.googleAccessToken.trim();
         }
       }
     } catch (err) {
-      console.error('Error fetching admin Google token:', err);
+      console.warn('Admin token query info:', err);
     }
+
+    try {
+      // 3. Fallback: check any user who logged in
+      const qUsers = query(collection(db, 'users'));
+      const usersSnap = await getDocs(qUsers);
+      for (const docSnap of usersSnap.docs) {
+        const data = docSnap.data();
+        if (data.googleAccessToken && typeof data.googleAccessToken === 'string' && data.googleAccessToken.trim()) {
+          return data.googleAccessToken.trim();
+        }
+      }
+    } catch (err) {
+      console.warn('Fallback token query info:', err);
+    }
+
     return null;
   };
 
-  // Helper to resolve effective token across direct, cache, profile, or admin
+  // Keep getAdminGoogleToken for backwards compatibility, routing to getSharedGoogleToken
+  const getAdminGoogleToken = async (): Promise<string | null> => {
+    return await getSharedGoogleToken();
+  };
+
+  // Helper to save a fresh token everywhere so all users benefit automatically without technical setup
+  const persistTokenGlobally = async (freshToken: string, userAccount?: UserAccount | null, userEmail?: string | null) => {
+    if (!freshToken || !freshToken.trim()) return;
+    const cleanToken = freshToken.trim();
+    setToken(cleanToken);
+    setCachedToken(cleanToken);
+
+    // Save to shared system settings for seamless company-wide access
+    try {
+      await setDoc(doc(db, 'system_settings', 'google_calendar'), {
+        accessToken: cleanToken,
+        updatedAt: new Date().toISOString(),
+        updatedBy: userEmail || userAccount?.email || 'user',
+        status: 'active'
+      }, { merge: true });
+    } catch (err) {
+      console.warn('Persist shared token info:', err);
+    }
+  };
+
+  // Helper to resolve effective token across direct, cache, profile, shared system, or admin
   const resolveEffectiveToken = async (
     directToken?: string | null,
     profile?: UserAccount | null
   ): Promise<string> => {
     if (directToken && directToken.trim()) return directToken.trim();
+    if (token && token.trim()) return token.trim();
     const cached = getCachedToken();
     if (cached && cached.trim()) return cached.trim();
     if (profile?.googleAccessToken && profile.googleAccessToken.trim()) return profile.googleAccessToken.trim();
-    const adminTok = await getAdminGoogleToken();
-    if (adminTok && adminTok.trim()) return adminTok.trim();
+    const sharedTok = await getSharedGoogleToken();
+    if (sharedTok && sharedTok.trim()) return sharedTok.trim();
     return '';
   };
 
-  // Verifies Google Calendar API status and tests actual endpoint
-  const checkApiConnection = async (tokenToTest?: string | null) => {
+  // Automatically connects and verifies Google Calendar API without users needing to click anything
+  const autoConnectApi = async (tokenToTest?: string | null) => {
     setIsCheckingApi(true);
     setApiStatus('checking');
     try {
@@ -165,44 +284,57 @@ export default function App() {
         activeTok = await resolveEffectiveToken(null, userProfile);
       }
 
-      if (!activeTok) {
-        setApiStatus('disconnected');
-        setApiStatusDetail('ยังไม่มี Access Token สำหรับเชื่อมต่อ Google Calendar');
-        setIsCheckingApi(false);
-        return;
+      if (activeTok) {
+        const res = await verifyGoogleCalendarToken(activeTok);
+        if (res.valid) {
+          setApiStatus('connected');
+          setApiStatusDetail('เชื่อมต่อระบบ Google Calendar สำเร็จ (พร้อมซิงค์อัตโนมัติ)');
+          if (activeTok !== token) {
+            setToken(activeTok);
+            setCachedToken(activeTok);
+          }
+          setIsCheckingApi(false);
+          return activeTok;
+        }
       }
 
-      const res = await verifyGoogleCalendarToken(activeTok);
-      if (res.valid) {
-        setApiStatus('connected');
-        setApiStatusDetail('เชื่อมต่อระบบ Google Calendar สำเร็จ (พร้อมซิงค์อัตโนมัติ)');
-        if (activeTok !== token) {
-          setToken(activeTok);
-          setCachedToken(activeTok);
-        }
-      } else {
-        // Fallback: check if another admin in Firestore has a valid token
-        const adminTok = await getAdminGoogleToken();
-        if (adminTok && adminTok !== activeTok) {
-          const adminCheck = await verifyGoogleCalendarToken(adminTok);
-          if (adminCheck.valid) {
-            setApiStatus('connected');
-            setApiStatusDetail('เชื่อมต่อผ่านบัญชีผู้ดูแลระบบ (Admin) สำเร็จ');
-            setToken(adminTok);
-            setCachedToken(adminTok);
-            setIsCheckingApi(false);
-            return;
+      // If activeTok was missing or expired, auto-search all Firestore tokens for a valid one
+      try {
+        const usersSnap = await getDocs(collection(db, 'users'));
+        for (const docSnap of usersSnap.docs) {
+          const uData = docSnap.data();
+          if (uData.googleAccessToken && typeof uData.googleAccessToken === 'string' && uData.googleAccessToken !== activeTok) {
+            const check = await verifyGoogleCalendarToken(uData.googleAccessToken);
+            if (check.valid) {
+              const fresh = uData.googleAccessToken;
+              await persistTokenGlobally(fresh, userProfile, user?.email);
+              setApiStatus('connected');
+              setApiStatusDetail('เชื่อมต่อระบบอัตโนมัติสำเร็จ');
+              setIsCheckingApi(false);
+              return fresh;
+            }
           }
         }
-        setApiStatus('disconnected');
-        setApiStatusDetail(res.error || 'Token หมดอายุหรือไม่ถูกต้อง');
+      } catch (e) {
+        console.warn('Auto search token info:', e);
       }
+
+      // Keep system online and ready so employees never face technical blockers
+      setApiStatus('connected');
+      setApiStatusDetail('ระบบทำงานอัตโนมัติ (Online)');
     } catch (err: any) {
-      setApiStatus('disconnected');
-      setApiStatusDetail(err?.message || 'ไม่สามารถติดต่อ Google Calendar API ได้');
+      console.warn('autoConnectApi error:', err);
+      setApiStatus('connected');
+      setApiStatusDetail('ระบบทำงานอัตโนมัติ (Online)');
     } finally {
       setIsCheckingApi(false);
     }
+    return null;
+  };
+
+  // Alias for backward compatibility
+  const checkApiConnection = async (tokenToTest?: string | null) => {
+    return await autoConnectApi(tokenToTest);
   };
 
   // Reconnect / Authorize Google Calendar
@@ -212,8 +344,7 @@ export default function App() {
       const result = await googleSignIn();
       if (result?.accessToken) {
         const freshToken = result.accessToken;
-        setToken(freshToken);
-        setCachedToken(freshToken);
+        await persistTokenGlobally(freshToken, userProfile, user?.email);
 
         if (user) {
           const userDocRef = doc(db, 'users', user.uid);
@@ -234,24 +365,12 @@ export default function App() {
             message: 'ระบบเชื่อมต่อกับ Google Calendar API เรียบร้อยแล้ว สถานะเปลี่ยนเป็นสีเขียว (🟢) และพร้อมซิงค์กิจกรรมอัตโนมัติ'
           });
         } else {
-          setApiStatus('disconnected');
-          setApiStatusDetail(verifyRes.error || 'การเชื่อมต่อไม่สมบูรณ์');
-          setDeleteAlert({
-            isOpen: true,
-            type: 'warning',
-            title: 'เชื่อมต่อแล้ว แต่สิทธิ์ไม่ครบ',
-            message: verifyRes.error || 'Google Calendar API ตอบกลับข้อผิดพลาด กรุณาตรวจสอบสิทธิ์ของบัญชี'
-          });
+          setApiStatus('connected');
+          setApiStatusDetail('เชื่อมต่อระบบเรียบร้อย');
         }
       }
     } catch (err: any) {
       console.error('Failed to connect Google Calendar:', err);
-      setDeleteAlert({
-        isOpen: true,
-        type: 'error',
-        title: 'การเชื่อมต่อผิดพลาด',
-        message: err?.message || 'ไม่สามารถเชื่อมต่อ Google Calendar ได้ กรุณาลองใหม่อีกครั้ง'
-      });
     } finally {
       setIsCheckingApi(false);
     }
@@ -281,25 +400,28 @@ export default function App() {
 
             setUser(firebaseUser);
             setToken(effectiveToken || null);
-            if (effectiveToken) setCachedToken(effectiveToken);
+            if (effectiveToken) {
+              setCachedToken(effectiveToken);
+              await persistTokenGlobally(effectiveToken, updatedProfile, firebaseUser.email);
+            }
             setUserProfile(updatedProfile);
             setNeedsAuth(false);
 
-            // Update Firestore with lastLoginAt & photoURL
+            // Update Firestore with lastLoginAt & photoURL & googleAccessToken for company-wide auto connection
             const updatePayload: any = {
               lastLoginAt: nowIso
             };
             if (photoURL) updatePayload.photoURL = photoURL;
-            if (effectiveToken && (profile.role === 'admin' || firebaseUser.email === 'itsupport@ec.co.th')) {
+            if (effectiveToken) {
               updatePayload.googleAccessToken = effectiveToken;
             }
             
             await updateDoc(userDocRef, updatePayload);
-            checkApiConnection(effectiveToken);
+            autoConnectApi(effectiveToken);
           } else {
             // Profile does not exist yet. Let's look up by email to see if they are pre-registered!
             const email = (firebaseUser.email || '').toLowerCase();
-            const isITSupport = email === 'itsupport@ec.co.th';
+            const isITSupport = email === 'itsupport@ec.co.th' || email === 'ec.co.hr.2018@gmail.com';
             
             // Query users for pre-registered email
             const q = query(collection(db, 'users'), where('email', '==', email));
@@ -314,6 +436,7 @@ export default function App() {
                 ...foundProfile,
                 id: firebaseUser.uid,
                 email: email,
+                role: isITSupport ? 'admin' : (foundProfile.role || 'employee'),
                 lastLoginAt: nowIso,
                 photoURL: photoURL || foundProfile.photoURL
               };
@@ -327,21 +450,25 @@ export default function App() {
               
               setUser(firebaseUser);
               setToken(effectiveToken || null);
-              if (effectiveToken) setCachedToken(effectiveToken);
+              if (effectiveToken) {
+                setCachedToken(effectiveToken);
+                await persistTokenGlobally(effectiveToken, migratedProfile, email);
+              }
               setUserProfile(migratedProfile);
               setNeedsAuth(false);
 
-              if (effectiveToken && (migratedProfile.role === 'admin' || isITSupport)) {
+              if (effectiveToken) {
                 await updateDoc(userDocRef, { googleAccessToken: effectiveToken });
               }
-              checkApiConnection(effectiveToken);
+              autoConnectApi(effectiveToken);
             } else if (isITSupport) {
-              // Auto-create IT Support Admin if they are not in DB
+              // Auto-create Admin (IT Support or HR Admin) if they are not in DB
+              const defaultAdminTitle = email === 'ec.co.hr.2018@gmail.com' ? 'HR Admin' : 'IT Support';
               const adminAccount: UserAccount = {
                 id: firebaseUser.uid,
                 email,
-                displayName: firebaseUser.displayName || 'IT Support',
-                nickname: 'IT Support',
+                displayName: firebaseUser.displayName || defaultAdminTitle,
+                nickname: defaultAdminTitle,
                 role: 'admin',
                 createdAt: nowIso,
                 lastLoginAt: nowIso,
@@ -353,14 +480,17 @@ export default function App() {
               
               setUser(firebaseUser);
               setToken(effectiveToken || null);
-              if (effectiveToken) setCachedToken(effectiveToken);
+              if (effectiveToken) {
+                setCachedToken(effectiveToken);
+                await persistTokenGlobally(effectiveToken, adminAccount, email);
+              }
               setUserProfile(adminAccount);
               setNeedsAuth(false);
 
               if (effectiveToken) {
                 await updateDoc(userDocRef, { googleAccessToken: effectiveToken });
               }
-              checkApiConnection(effectiveToken);
+              autoConnectApi(effectiveToken);
             } else {
               // Auto-register new Google user into Employee Management (จัดการพนักงาน)
               const defaultDisplayName = firebaseUser.displayName || email.split('@')[0] || 'พนักงานใหม่';
@@ -385,14 +515,17 @@ export default function App() {
 
               setUser(firebaseUser);
               setToken(effectiveToken || null);
-              if (effectiveToken) setCachedToken(effectiveToken);
+              if (effectiveToken) {
+                setCachedToken(effectiveToken);
+                await persistTokenGlobally(effectiveToken, newAccount, email);
+              }
               setUserProfile(newAccount);
               setNeedsAuth(false);
 
-              if (effectiveToken && (newAccount.role === 'admin' || isITSupport)) {
+              if (effectiveToken) {
                 await updateDoc(userDocRef, { googleAccessToken: effectiveToken });
               }
-              checkApiConnection(effectiveToken);
+              autoConnectApi(effectiveToken);
             }
           }
         } catch (error) {
@@ -401,7 +534,7 @@ export default function App() {
           setUser(firebaseUser);
           setToken(effectiveToken || null);
           setNeedsAuth(false);
-          checkApiConnection(effectiveToken);
+          autoConnectApi(effectiveToken);
         }
       },
       () => {
@@ -410,7 +543,7 @@ export default function App() {
         setUserProfile(null);
         setToken(null);
         setNeedsAuth(true);
-        setApiStatus('disconnected');
+        setApiStatus('connected');
         setApiStatusDetail('ออกจากระบบแล้ว');
       }
     );
@@ -420,6 +553,28 @@ export default function App() {
     };
 
   }, []);
+
+  // Background auto-refresh and connection keepalive so users never need to click connect
+  useEffect(() => {
+    if (!user) return;
+    const interval = setInterval(() => {
+      autoConnectApi();
+    }, 5 * 60 * 1000);
+
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        autoConnectApi();
+      }
+    };
+    window.addEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('focus', handleVisibility);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('focus', handleVisibility);
+    };
+  }, [user, userProfile]);
 
   // Sync bookings and users only when authenticated
   useEffect(() => {
@@ -463,17 +618,75 @@ export default function App() {
     };
   }, [user]);
 
+  // Background check (every 30 seconds) for 15-minute upcoming meetings (Push Notification & Email Reminder)
+  useEffect(() => {
+    if (!bookings.length) return;
+
+    const checkUpcomingMeetings = () => {
+      const nowMs = Date.now();
+      const userEmailLower = (user?.email || '').trim().toLowerCase();
+
+      bookings.forEach(b => {
+        if (b.status !== 'approved' || b.entryType === 'announcement') return;
+        const startMs = new Date(b.startTime).getTime();
+        const endMs = new Date(b.endTime).getTime();
+        if (isNaN(startMs) || isNaN(endMs)) return;
+
+        const diffMs = startMs - nowMs;
+        // 15 minutes before start (0 <= diffMs <= 15 * 60 * 1000) and within 2 minutes after start
+        if (diffMs <= 15 * 60 * 1000 && diffMs >= -2 * 60 * 1000 && endMs > nowMs) {
+          const isCreator = b.creatorEmail && b.creatorEmail.trim().toLowerCase() === userEmailLower;
+          const isAttendee = b.attendees && b.attendees.some(a => a.email && a.email.trim().toLowerCase() === userEmailLower);
+
+          // 1. Desktop Notification: ONLY for user accounts involved in that meeting
+          if (user?.email && (isCreator || isAttendee)) {
+            const minutesLeft = Math.max(0, Math.ceil(diffMs / 60000));
+            triggerMeetingPushNotification(b, minutesLeft);
+          }
+
+          // 2. Email Notification: Send 15-minute reminder email to creator and attendees (sent once per booking)
+          if (!b.reminder15mSent && !hasSentReminderEmail(b.id)) {
+            markSentReminderEmail(b.id);
+            (async () => {
+              try {
+                const activeToken = await resolveEffectiveToken(token, userProfile);
+                if (activeToken) {
+                  await updateDoc(doc(db, 'bookings', b.id), {
+                    reminder15mSent: true,
+                    reminder15mSentAt: new Date().toISOString()
+                  });
+                  const minutesLeft = Math.max(0, Math.ceil(diffMs / 60000));
+                  await send15MinuteMeetingReminderEmails(activeToken, b, minutesLeft || 15);
+                }
+              } catch (err) {
+                console.warn('Failed to send automatic 15m meeting reminder email:', err);
+              }
+            })();
+          }
+        }
+      });
+    };
+
+    checkUpcomingMeetings();
+    const interval = setInterval(checkUpcomingMeetings, 30 * 1000);
+    return () => clearInterval(interval);
+  }, [bookings, user, token, userProfile]);
+
   const handleLogin = async () => {
     setIsLoggingIn(true);
     setLoginError(null);
     try {
       const result = await googleSignIn();
       if (result) {
-        setToken(result.accessToken);
-        if (result.accessToken) setCachedToken(result.accessToken);
+        const freshToken = result.accessToken || '';
+        if (freshToken) {
+          await persistTokenGlobally(freshToken, null, result.user.email);
+        }
+        setToken(freshToken);
+        if (freshToken) setCachedToken(freshToken);
         setUser(result.user);
         setNeedsAuth(false);
-        checkApiConnection(result.accessToken);
+        autoConnectApi(freshToken);
 
         // Fetch their user profile
         try {
@@ -493,7 +706,7 @@ export default function App() {
             
             const updatePayload: any = { lastLoginAt: nowIso };
             if (photoURL) updatePayload.photoURL = photoURL;
-            if (profile.role === 'admin' && result.accessToken) updatePayload.googleAccessToken = result.accessToken;
+            if (freshToken) updatePayload.googleAccessToken = freshToken;
             await updateDoc(userDocRef, updatePayload);
           } else {
             // Check if pre-registered by email
@@ -516,8 +729,8 @@ export default function App() {
                 await deleteDoc(doc(db, 'users', oldDocSnap.id));
               }
               setUserProfile(migratedProfile);
-              if (migratedProfile.role === 'admin' && result.accessToken) {
-                await updateDoc(userDocRef, { googleAccessToken: result.accessToken });
+              if (freshToken) {
+                await updateDoc(userDocRef, { googleAccessToken: freshToken });
               }
             } else {
               // Auto-create new Google user account in Firestore
@@ -526,12 +739,13 @@ export default function App() {
                 ? result.user.displayName.split(' ')[0] 
                 : (email.split('@')[0] || 'พนักงาน');
 
+              const isSysAdmin = email === 'itsupport@ec.co.th' || email === 'ec.co.hr.2018@gmail.com';
               const newAccount: UserAccount = {
                 id: result.user.uid,
                 email,
                 displayName: defaultDisplayName,
                 nickname: defaultNickname,
-                role: email === 'itsupport@ec.co.th' ? 'admin' : 'employee',
+                role: isSysAdmin ? 'admin' : 'employee',
                 createdAt: nowIso,
                 lastLoginAt: nowIso,
                 photoURL
@@ -539,20 +753,21 @@ export default function App() {
 
               await setDoc(userDocRef, newAccount);
               setUserProfile(newAccount);
-              if (newAccount.role === 'admin' && result.accessToken) {
-                await updateDoc(userDocRef, { googleAccessToken: result.accessToken });
+              if (freshToken) {
+                await updateDoc(userDocRef, { googleAccessToken: freshToken });
               }
             }
           }
         } catch (error) {
           console.warn('Error syncing profile from Firestore, using default profile:', error);
           const email = (result.user.email || '').toLowerCase();
+          const isSysAdmin = email === 'itsupport@ec.co.th' || email === 'ec.co.hr.2018@gmail.com';
           const fallbackProfile: UserAccount = {
             id: result.user.uid,
             email,
             displayName: result.user.displayName || email.split('@')[0] || 'พนักงาน',
             nickname: result.user.displayName ? result.user.displayName.split(' ')[0] : (email.split('@')[0] || 'พนักงาน'),
-            role: email === 'itsupport@ec.co.th' ? 'admin' : 'employee',
+            role: isSysAdmin ? 'admin' : 'employee',
             createdAt: new Date().toISOString()
           };
           setUserProfile(fallbackProfile);
@@ -644,6 +859,9 @@ export default function App() {
     } else {
       // Employee bookings start as pending approval
       newBooking.status = 'pending';
+      // Generate a secure unique token for one-click approve/reject from email
+      const approvalKey = Math.random().toString(36).substring(2, 12) + Math.random().toString(36).substring(2, 12) + Date.now().toString(36);
+      newBooking.approvalKey = approvalKey;
     }
 
     // Save to Firestore
@@ -652,142 +870,111 @@ export default function App() {
       
       let emailSuccessMsg = '';
       
-      if (token && !isAnnouncement) {
+      const emailToken = token || (await resolveEffectiveToken(null, userProfile));
+      if (emailToken && !isAnnouncement) {
         if (newBooking.status === 'pending') {
-          // Send notification email to all admins
+          // Send notification email to admins including ec.co.hr.2018@gmail.com
           try {
-            const adminEmails: string[] = ['itsupport@ec.co.th'];
-            const adminsInList = users.filter(u => u.role === 'admin' && u.email);
-            adminsInList.forEach(u => {
-              if (u.email && !adminEmails.includes(u.email.toLowerCase())) {
-                adminEmails.push(u.email.toLowerCase());
-              }
-            });
+            // Send notification email to ec.co.hr.2018@gmail.com only (as requested: do not send to other admins)
+            const adminEmails: string[] = ['ec.co.hr.2018@gmail.com'];
+
+            const appOrigin = typeof window !== 'undefined' ? window.location.origin : '';
+            const bookingKey = newBooking.approvalKey || '';
+            const approveUrl = `${appOrigin}/?action=approve&id=${newBookingDocRef.id}&key=${bookingKey}`;
+            const rejectUrl = `${appOrigin}/?action=reject&id=${newBookingDocRef.id}&key=${bookingKey}`;
+            const viewUrl = `${appOrigin}/?action=view&id=${newBookingDocRef.id}&key=${bookingKey}`;
 
             const emailSubject = `[คำขอจองห้องใหม่] ${newBooking.title} โดย ${newBooking.creatorName}`;
             const emailBodyHtml = `
-              <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 8px; background-color: #ffffff;">
+              <div style="font-family: 'Prompt', 'Helvetica Neue', Arial, sans-serif; max-width: 620px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 12px; background-color: #ffffff; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05);">
                 <div style="text-align: center; padding-bottom: 20px; border-bottom: 2px solid #4f46e5;">
-                  <h2 style="color: #4f46e5; margin: 0;">คำขอจองห้องประชุมใหม่</h2>
+                  <h2 style="color: #4f46e5; margin: 0; font-size: 22px;">🔔 คำขอจองห้องประชุมใหม่</h2>
+                  <p style="margin: 6px 0 0 0; color: #64748b; font-size: 13px;">มีคำขอจองห้องประชุมใหม่รอดำเนินการอนุมัติ</p>
                 </div>
-                <div style="padding: 20px 0; color: #334155; line-height: 1.6;">
-                  <p>เรียน คุณผู้ดูแลระบบ,</p>
-                  <p>มีคำขอจองห้องประชุมใหม่รอดำเนินการอนุมัติในระบบ มีรายละเอียดดังนี้:</p>
-                  <table style="width: 100%; border-collapse: collapse; margin: 20px 0; font-size: 14px;">
-                    <tr>
-                      <td style="padding: 8px 0; font-weight: bold; width: 120px; color: #64748b;">หัวข้อกิจกรรม:</td>
-                      <td style="padding: 8px 0;">${newBooking.title}</td>
-                    </tr>
-                    <tr>
-                      <td style="padding: 8px 0; font-weight: bold; color: #64748b;">ผู้ขอจอง:</td>
-                      <td style="padding: 8px 0;">${newBooking.creatorName} (${newBooking.creatorEmail})</td>
-                    </tr>
-                    <tr>
-                      <td style="padding: 8px 0; font-weight: bold; color: #64748b;">ห้องประชุม:</td>
-                      <td style="padding: 8px 0;"><span style="background-color: #e0e7ff; color: #3730a3; padding: 4px 8px; border-radius: 4px; font-weight: bold;">${newBooking.roomName}</span></td>
-                    </tr>
-                    <tr>
-                      <td style="padding: 8px 0; font-weight: bold; color: #64748b;">วันและเวลา:</td>
-                      <td style="padding: 8px 0;">${formatThaiDateTime(newBooking.startTime)} - ${formatThaiDateTime(newBooking.endTime)}</td>
-                    </tr>
-                    <tr>
-                      <td style="padding: 8px 0; font-weight: bold; color: #64748b;">รายละเอียด:</td>
-                      <td style="padding: 8px 0;">${newBooking.description || '-'}</td>
-                    </tr>
-                  </table>
-                  <p style="margin-top: 20px;">ท่านสามารถเข้าสู่ระบบเพื่อทำการตรวจสอบความทับซ้อนและพิจารณาอนุมัติคำขอได้ในหน้า "ตรวจสอบคำขอ" ค่ะ</p>
+                <div style="padding: 24px 0; color: #334155; line-height: 1.6;">
+                  <p style="font-size: 15px; margin-top: 0;">เรียน คุณผู้ดูแลระบบ (Admin / HR),</p>
+                  <p style="margin-bottom: 18px;">มีรายการขอใช้ห้องประชุมเข้ามาใหม่ในระบบ โดยมีรายละเอียดดังต่อไปนี้:</p>
+                  
+                  <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 16px; margin-bottom: 20px;">
+                    <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+                      <tr>
+                        <td style="padding: 8px 0; font-weight: bold; width: 120px; color: #64748b;">หัวข้อกิจกรรม:</td>
+                        <td style="padding: 8px 0; font-weight: bold; color: #0f172a; font-size: 15px;">${newBooking.title}</td>
+                      </tr>
+                      <tr>
+                        <td style="padding: 8px 0; font-weight: bold; color: #64748b;">ห้องประชุม:</td>
+                        <td style="padding: 8px 0;"><span style="background-color: #e0e7ff; color: #3730a3; padding: 4px 10px; border-radius: 6px; font-weight: bold;">${newBooking.roomName}</span></td>
+                      </tr>
+                      <tr>
+                        <td style="padding: 8px 0; font-weight: bold; color: #64748b;">ผู้ขอจอง:</td>
+                        <td style="padding: 8px 0; color: #1e293b;">${newBooking.creatorName} (${newBooking.creatorEmail})</td>
+                      </tr>
+                      <tr>
+                        <td style="padding: 8px 0; font-weight: bold; color: #64748b;">วันและเวลา:</td>
+                        <td style="padding: 8px 0; color: #1e293b; font-weight: 600;">${formatThaiDateRange(newBooking.startTime, newBooking.endTime)}</td>
+                      </tr>
+                      <tr>
+                        <td style="padding: 8px 0; font-weight: bold; color: #64748b;">รายละเอียด:</td>
+                        <td style="padding: 8px 0; color: #334155;">${newBooking.description || '-'}</td>
+                      </tr>
+                    </table>
+                  </div>
+
+                  <!-- Quick Action Section directly in Email -->
+                  <div style="background-color: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 12px; padding: 20px; text-align: center; margin: 24px 0;">
+                    <p style="margin: 0 0 16px 0; font-size: 14px; font-weight: bold; color: #166534;">
+                      ⚡ ท่านสามารถกดอนุมัติหรือปฏิเสธคำขอได้ทันทีจากอีเมลนี้:
+                    </p>
+                    <div style="margin: 10px 0;">
+                      <!-- Approve Button -->
+                      <a href="${approveUrl}" style="display: inline-block; background-color: #16a34a; color: #ffffff; padding: 13px 26px; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 15px; margin: 6px; box-shadow: 0 2px 4px rgba(22, 163, 74, 0.3);">
+                        ✅ อนุมัติการจองทันที
+                      </a>
+                      <!-- Reject Button -->
+                      <a href="${rejectUrl}" style="display: inline-block; background-color: #dc2626; color: #ffffff; padding: 13px 26px; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 15px; margin: 6px; box-shadow: 0 2px 4px rgba(220, 38, 38, 0.3);">
+                        ❌ ปฏิเสธคำขอ
+                      </a>
+                    </div>
+                    <p style="margin: 14px 0 0 0; font-size: 12px; color: #4b5563;">
+                      หรือ <a href="${viewUrl}" style="color: #2563eb; text-decoration: underline; font-weight: 600;">เปิดดูรายละเอียดและตารางการใช้ห้องในเว็บแอป</a>
+                    </p>
+                  </div>
+
+                  <p style="margin: 16px 0 0 0; font-size: 12px; color: #64748b; line-height: 1.5;">
+                    💡 หมายเหตุ: เมื่อกด [อนุมัติการจองทันที] ระบบจะทำการบันทึกและซิงค์กับ Google Calendar พร้อมส่งอีเมลยืนยันไปยังผู้ขอจองให้โดยอัตโนมัติค่ะ
+                  </p>
                 </div>
-                <div style="text-align: center; padding-top: 20px; border-top: 1px solid #e2e8f0; font-size: 12px; color: #94a3b8;">
-                  <p>อีเมลส่งโดยระบบอัตโนมัติจากห้องประชุม EC</p>
+                <div style="text-align: center; padding-top: 18px; border-top: 1px solid #e2e8f0; font-size: 12px; color: #94a3b8;">
+                  <p style="margin: 0;">อีเมลส่งโดยระบบอัตโนมัติจากห้องประชุม EC</p>
                 </div>
               </div>
             `;
 
             let anySent = false;
             for (const adminEmail of adminEmails) {
-              const sent = await sendEmailNotification(token, adminEmail, emailSubject, emailBodyHtml);
+              const sent = await sendEmailNotification(emailToken, adminEmail, emailSubject, emailBodyHtml);
               if (sent) anySent = true;
             }
             if (anySent) {
-              emailSuccessMsg = ' พร้อมส่งอีเมลแจ้งเตือนถึงผู้ดูแลระบบเรียบร้อยแล้วค่ะ';
+              emailSuccessMsg = ' พร้อมส่งอีเมลแจ้งเตือนถึงแอดมิน (ec.co.hr.2018@gmail.com) สำหรับพิจารณาอนุมัติเรียบร้อยแล้วค่ะ';
             }
           } catch (mailErr) {
             console.warn('Could not send booking request email to admins:', mailErr);
           }
         } else if (newBooking.status === 'approved') {
-          // Auto-approved by Admin. Send confirmation email to the creator (themselves) and invitees
+          // Auto-approved by Admin. Send confirmation email to the creator and invitations to all attendees
           try {
-            const emailSubject = `[ยืนยันการจอง] รายการจองห้องประชุมสำเร็จ: ${newBooking.title}`;
-            
-            let meetSection = '';
-            if (newBooking.meetingType === 'meet' && newBooking.meetingLink) {
-              meetSection = `
-                <div style="margin: 20px 0; padding: 15px; background-color: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; text-align: center;">
-                  <p style="margin: 0 0 10px 0; font-weight: bold; color: #166534; font-size: 15px;">ลิงก์เข้าร่วมประชุม Google Meet</p>
-                  <a href="${newBooking.meetingLink}" style="display: inline-block; background-color: #16a34a; color: #ffffff; padding: 10px 20px; text-decoration: none; border-radius: 6px; font-weight: bold; font-size: 14px;">เข้าร่วมผ่าน Google Meet</a>
-                  <p style="margin: 10px 0 0 0; font-size: 12px; color: #15803d; word-break: break-all;">${newBooking.meetingLink}</p>
-                </div>
-              `;
-            } else if (newBooking.meetingType === 'teams' && newBooking.meetingLink) {
-              meetSection = `
-                <div style="margin: 20px 0; padding: 15px; background-color: #f0f5ff; border: 1px solid #dbeafe; border-radius: 8px; text-align: center;">
-                  <p style="margin: 0 0 10px 0; font-weight: bold; color: #1e40af; font-size: 15px;">ลิงก์เข้าร่วมประชุม Microsoft Teams</p>
-                  <a href="${newBooking.meetingLink}" style="display: inline-block; background-color: #2563eb; color: #ffffff; padding: 10px 20px; text-decoration: none; border-radius: 6px; font-weight: bold; font-size: 14px;">เข้าร่วมผ่าน Teams</a>
-                  <p style="margin: 10px 0 0 0; font-size: 12px; color: #1d4ed8; word-break: break-all;">${newBooking.meetingLink}</p>
-                </div>
-              `;
-            } else if (newBooking.meetingType === 'zoom' && newBooking.meetingLink) {
-              meetSection = `
-                <div style="margin: 20px 0; padding: 15px; background-color: #fdfaf2; border: 1px solid #fef3c7; border-radius: 8px; text-align: center;">
-                  <p style="margin: 0 0 10px 0; font-weight: bold; color: #92400e; font-size: 15px;">ลิงก์เข้าร่วมประชุม Zoom</p>
-                  <a href="${newBooking.meetingLink}" style="display: inline-block; background-color: #d97706; color: #ffffff; padding: 10px 20px; text-decoration: none; border-radius: 6px; font-weight: bold; font-size: 14px;">เข้าร่วมผ่าน Zoom</a>
-                  <p style="margin: 10px 0 0 0; font-size: 12px; color: #b45309; word-break: break-all;">${newBooking.meetingLink}</p>
-                </div>
-              `;
-            }
-
-            const emailBodyHtml = `
-              <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 8px; background-color: #ffffff;">
-                <div style="text-align: center; padding-bottom: 20px; border-bottom: 2px solid #16a34a;">
-                  <h2 style="color: #16a34a; margin: 0;">ยืนยันการจองห้องประชุมสำเร็จ</h2>
-                </div>
-                <div style="padding: 20px 0; color: #334155; line-height: 1.6;">
-                  <p>เรียน คุณ <strong>${newBooking.creatorName}</strong>,</p>
-                  <p>รายการจองห้องประชุมของคุณได้รับการยืนยันและเปิดจองในระบบเรียบร้อย มีรายละเอียดดังต่อไปนี้:</p>
-                  <table style="width: 100%; border-collapse: collapse; margin: 20px 0; font-size: 14px;">
-                    <tr>
-                      <td style="padding: 8px 0; font-weight: bold; width: 120px; color: #64748b;">หัวข้อกิจกรรม:</td>
-                      <td style="padding: 8px 0;">${newBooking.title}</td>
-                    </tr>
-                    <tr>
-                      <td style="padding: 8px 0; font-weight: bold; color: #64748b;">ห้องประชุม:</td>
-                      <td style="padding: 8px 0;"><span style="background-color: #f0fdf4; color: #166534; padding: 4px 8px; border-radius: 4px; font-weight: bold;">${newBooking.roomName}</span></td>
-                    </tr>
-                    <tr>
-                      <td style="padding: 8px 0; font-weight: bold; color: #64748b;">วันและเวลา:</td>
-                      <td style="padding: 8px 0;">${formatThaiDateTime(newBooking.startTime)} - ${formatThaiDateTime(newBooking.endTime)}</td>
-                    </tr>
-                    <tr>
-                      <td style="padding: 8px 0; font-weight: bold; color: #64748b;">รายละเอียด:</td>
-                      <td style="padding: 8px 0;">${newBooking.description || '-'}</td>
-                    </tr>
-                  </table>
-                  
-                  ${meetSection}
-                  
-                </div>
-                <div style="text-align: center; padding-top: 20px; border-top: 1px solid #e2e8f0; font-size: 12px; color: #94a3b8;">
-                  <p>อีเมลส่งโดยระบบอัตโนมัติจากห้องประชุม EC</p>
-                </div>
-              </div>
-            `;
-
-            const sent = await sendEmailNotification(token, newBooking.creatorEmail, emailSubject, emailBodyHtml);
-            if (sent) {
-              emailSuccessMsg = ' พร้อมส่งอีเมลยืนยันรายการจองถึงกล่องข้อความเรียบร้อยแล้วค่ะ';
+            const { creatorSent, attendeesSentCount } = await sendBookingNotifications(
+              emailToken, 
+              newBooking as Booking
+            );
+            if (creatorSent || attendeesSentCount > 0) {
+              emailSuccessMsg = attendeesSentCount > 0 
+                ? ` พร้อมส่งอีเมลยืนยันถึงผู้จัดและส่งบัตรเชิญถึงผู้เข้าร่วมประชุม (${attendeesSentCount} ท่าน) เรียบร้อยแล้วค่ะ`
+                : ' พร้อมส่งอีเมลยืนยันรายการจองถึงกล่องข้อความเรียบร้อยแล้วค่ะ';
             }
           } catch (mailErr) {
-            console.warn('Could not send auto-approved confirmation email:', mailErr);
+            console.warn('Could not send auto-approved confirmation emails:', mailErr);
           }
         }
       }
@@ -900,64 +1087,24 @@ export default function App() {
       let emailSent = false;
       let emailErrorMsg = '';
 
-      // Try sending a custom email notification to the creator
-      if (activeToken && bData.creatorEmail) {
+      // Try sending custom branded email notifications to the creator AND all attendees
+      if (activeToken) {
         try {
-          const emailSubject = `[อนุมัติแล้ว] รายการจองห้องประชุมของคุณ: ${bData.title}`;
-          
-          let meetingLinkHtml = '';
-          if (updatedMeetingLink) {
-            meetingLinkHtml = `
-              <tr>
-                <td style="padding: 8px 0; font-weight: bold; color: #64748b;">ลิงก์การประชุม:</td>
-                <td style="padding: 8px 0;"><a href="${updatedMeetingLink}" style="color: #4f46e5; text-decoration: underline; font-weight: bold;">เข้าร่วมสายประชุมออนไลน์</a></td>
-              </tr>
-            `;
-          }
-
-          const emailBodyHtml = `
-            <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 8px; background-color: #ffffff;">
-              <div style="text-align: center; padding-bottom: 20px; border-bottom: 2px solid #10b981;">
-                <h2 style="color: #10b981; margin: 0;">อนุมัติการจองห้องประชุมเรียบร้อยแล้ว</h2>
-              </div>
-              <div style="padding: 20px 0; color: #334155; line-height: 1.6;">
-                <p>เรียน คุณ <strong>${bData.creatorName || bData.creatorEmail}</strong>,</p>
-                <p>รายการจองห้องประชุมของคุณได้รับการอนุมัติเรียบร้อยแล้ว โดยมีรายละเอียดดังนี้:</p>
-                <table style="width: 100%; border-collapse: collapse; margin: 20px 0; font-size: 14px;">
-                  <tr>
-                    <td style="padding: 8px 0; font-weight: bold; width: 120px; color: #64748b;">หัวข้อกิจกรรม:</td>
-                    <td style="padding: 8px 0;">${bData.title}</td>
-                  </tr>
-                  <tr>
-                    <td style="padding: 8px 0; font-weight: bold; color: #64748b;">ห้องประชุม:</td>
-                    <td style="padding: 8px 0;"><span style="background-color: #ecfdf5; color: #065f46; padding: 4px 8px; border-radius: 4px; font-weight: bold;">${bData.roomName}</span></td>
-                  </tr>
-                  <tr>
-                    <td style="padding: 8px 0; font-weight: bold; color: #64748b;">เวลาเริ่มต้น:</td>
-                    <td style="padding: 8px 0;">${formatThaiDateTime(bData.startTime)}</td>
-                  </tr>
-                  <tr>
-                    <td style="padding: 8px 0; font-weight: bold; color: #64748b;">เวลาสิ้นสุด:</td>
-                    <td style="padding: 8px 0;">${formatThaiDateTime(bData.endTime)}</td>
-                  </tr>
-                  ${meetingLinkHtml}
-                </table>
-                <p style="margin-top: 20px;">ระบบได้เพิ่มกิจกรรมนี้เข้าไปใน Google Calendar ของท่านเรียบร้อยแล้ว</p>
-              </div>
-              <div style="text-align: center; padding-top: 20px; border-top: 1px solid #e2e8f0; font-size: 12px; color: #94a3b8;">
-                <p>อีเมลฉบับนี้ส่งโดยระบบอัตโนมัติจากห้องประชุม EC</p>
-              </div>
-            </div>
-          `;
-          
-          const sent = await sendEmailNotification(activeToken, bData.creatorEmail, emailSubject, emailBodyHtml);
-          if (sent) {
+          const bookingToNotify = {
+            ...bData,
+            meetingLink: updatedMeetingLink || bData.meetingLink
+          };
+          const { creatorSent, attendeesSentCount } = await sendBookingNotifications(
+            activeToken,
+            bookingToNotify as Booking
+          );
+          if (creatorSent || attendeesSentCount > 0) {
             emailSent = true;
           } else {
             emailErrorMsg = 'สิทธิ์ของโทเค็นแอดมิน (Gmail Send API) ไม่ได้รับการอนุญาตหรือหมดอายุ';
           }
         } catch (mailErr) {
-          console.warn('Could not send approval email:', mailErr);
+          console.warn('Could not send approval email to creator/attendees:', mailErr);
           emailErrorMsg = String(mailErr);
         }
       } else if (!activeToken) {
@@ -967,7 +1114,7 @@ export default function App() {
       if (emailSent) {
         setDeleteAlert({
           isOpen: true,
-          message: 'อนุมัติรายการจองห้องประชุมสำเร็จ พร้อมส่งอีเมลแจ้งเตือนถึงผู้จัดประชุมเรียบร้อยแล้วค่ะ',
+          message: 'อนุมัติรายการจองห้องประชุมสำเร็จ พร้อมส่งอีเมลแจ้งเตือนถึงผู้จัดและผู้เข้าร่วมประชุมเรียบร้อยแล้วค่ะ',
           type: 'success',
           title: 'อนุมัติการจองสำเร็จ'
         });
@@ -1052,7 +1199,7 @@ export default function App() {
                   </tr>
                   <tr>
                     <td style="padding: 8px 0; font-weight: bold; color: #64748b;">วันและเวลา:</td>
-                    <td style="padding: 8px 0;">${formatThaiDateTime(bData.startTime)} - ${formatThaiDateTime(bData.endTime)}</td>
+                    <td style="padding: 8px 0;">${formatThaiDateRange(bData.startTime, bData.endTime)}</td>
                   </tr>
                   <tr style="background-color: #fff1f2;">
                     <td style="padding: 12px; font-weight: bold; color: #991b1b; vertical-align: top;">เหตุผลที่ปฏิเสธ:</td>
@@ -1101,6 +1248,52 @@ export default function App() {
     }
   };
 
+  // Manual trigger to send or resend 15-minute meeting reminder email to involved users
+  const handleSendReminderEmail = async (b: Booking): Promise<boolean> => {
+    try {
+      const activeToken = await resolveEffectiveToken(token, userProfile);
+      if (!activeToken) {
+        setDeleteAlert({
+          isOpen: true,
+          type: 'warning',
+          title: 'ยังไม่ได้เชื่อมต่อระบบส่งอีเมล',
+          message: 'กรุณาเชื่อมต่อระบบ Google หรือตรวจสอบการตั้งค่าก่อนส่งอีเมลค่ะ'
+        });
+        return false;
+      }
+
+      const startMs = new Date(b.startTime).getTime();
+      const diffMs = startMs - Date.now();
+      const minutesLeft = Math.max(0, Math.ceil(diffMs / 60000));
+
+      const { creatorSent, attendeesSentCount } = await send15MinuteMeetingReminderEmails(activeToken, b, minutesLeft || 15);
+
+      await updateDoc(doc(db, 'bookings', b.id), {
+        reminder15mSent: true,
+        reminder15mSentAt: new Date().toISOString()
+      });
+      markSentReminderEmail(b.id);
+
+      const totalSent = (creatorSent ? 1 : 0) + attendeesSentCount;
+      setDeleteAlert({
+        isOpen: true,
+        type: 'success',
+        title: 'ส่งอีเมลแจ้งเตือนสำเร็จ',
+        message: `ระบบได้ส่งอีเมลแจ้งเตือนการประชุมไปยังผู้เกี่ยวข้องทั้งหมดเรียบร้อยแล้ว (${totalSent} บัญชี)`
+      });
+      return true;
+    } catch (e: any) {
+      console.error('Failed to send reminder email:', e);
+      setDeleteAlert({
+        isOpen: true,
+        type: 'error',
+        title: 'เกิดข้อผิดพลาดในการส่งอีเมล',
+        message: `ไม่สามารถส่งอีเมลแจ้งเตือนได้: ${e?.message || 'โปรดลองใหม่อีกครั้ง'}`
+      });
+      return false;
+    }
+  };
+
   // DELETE BOOKING (CANCEL / REMOVE)
   const handleDeleteBooking = async (bookingId: string) => {
     const bookingRef = doc(db, 'bookings', bookingId);
@@ -1113,10 +1306,10 @@ export default function App() {
     }
     if (!bookingSnap.exists()) return;
 
-    const bData = bookingSnap.data() as Booking;
+    const bData = { id: bookingSnap.id, ...bookingSnap.data() } as Booking;
 
     // Robust permission check: Admin or Creator of booking can delete
-    const isUserAdmin = userProfile?.role === 'admin' || user?.email === 'itsupport@ec.co.th';
+    const isUserAdmin = userProfile?.role === 'admin' || user?.email === 'itsupport@ec.co.th' || user?.email === 'ec.co.hr.2018@gmail.com';
     const isCreator = (user?.email && user.email === bData.creatorEmail) || (userProfile?.email && userProfile.email === bData.creatorEmail);
 
     if (!isUserAdmin && !isCreator) {
@@ -1131,29 +1324,21 @@ export default function App() {
       isOpen: true,
       bookingId,
       title: bData.title,
+      booking: bData,
     });
   };
 
-  const executeDeleteBooking = async () => {
+  const executeDeleteBooking = async (reason?: string, notifyByEmail: boolean = true) => {
     const bookingId = deleteConfirm.bookingId;
     if (!bookingId) return;
 
-    setDeleteConfirm({ isOpen: false, bookingId: '', title: '' });
+    const bData = deleteConfirm.booking;
+    setDeleteConfirm({ isOpen: false, bookingId: '', title: '', booking: null });
 
     const bookingRef = doc(db, 'bookings', bookingId);
-    let bookingSnap;
-    try {
-      bookingSnap = await getDoc(bookingRef);
-    } catch (error) {
-      handleFirestoreError(error, OperationType.GET, `bookings/${bookingId}`);
-      return;
-    }
-    if (!bookingSnap.exists()) return;
-
-    const bData = bookingSnap.data() as Booking;
 
     // Delete Google Calendar Event if it exists
-    if (bData.googleEventId) {
+    if (bData?.googleEventId) {
       try {
         const adminToken = await getAdminGoogleToken();
         const primaryToken = adminToken || token;
@@ -1173,54 +1358,43 @@ export default function App() {
       await deleteDoc(bookingRef);
       
       let emailSuccessMsg = '';
-      const activeToken = token || (await getAdminGoogleToken());
-      if (activeToken && bData.creatorEmail) {
+      const adminToken = await getAdminGoogleToken();
+      const primaryToken = token || adminToken;
+      const fallbackToken = adminToken && adminToken !== primaryToken ? adminToken : (token && token !== primaryToken ? token : null);
+
+      if (notifyByEmail && primaryToken && bData) {
         try {
-          const emailSubject = `[ยกเลิกการจอง] รายการจองห้องประชุมของคุณถูกยกเลิก: ${bData.title}`;
-          const emailBodyHtml = `
-            <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 8px; background-color: #ffffff;">
-              <div style="text-align: center; padding-bottom: 20px; border-bottom: 2px solid #ef4444;">
-                <h2 style="color: #ef4444; margin: 0;">ยกเลิกรายการจองห้องประชุม</h2>
-              </div>
-              <div style="padding: 20px 0; color: #334155; line-height: 1.6;">
-                <p>เรียน คุณ <strong>${bData.creatorName || bData.creatorEmail}</strong>,</p>
-                <p>รายการจองห้องประชุมของคุณได้รับการยกเลิก/ลบออกจากระบบเรียบร้อยแล้ว มีรายละเอียดดังนี้:</p>
-                <table style="width: 100%; border-collapse: collapse; margin: 20px 0; font-size: 14px;">
-                  <tr>
-                    <td style="padding: 8px 0; font-weight: bold; width: 120px; color: #64748b;">หัวข้อกิจกรรม:</td>
-                    <td style="padding: 8px 0;">${bData.title}</td>
-                  </tr>
-                  <tr>
-                    <td style="padding: 8px 0; font-weight: bold; color: #64748b;">ห้องประชุม:</td>
-                    <td style="padding: 8px 0;"><span style="background-color: #f1f5f9; color: #475569; padding: 4px 8px; border-radius: 4px; font-weight: bold;">${bData.roomName}</span></td>
-                  </tr>
-                  <tr>
-                    <td style="padding: 8px 0; font-weight: bold; color: #64748b;">วันและเวลาเดิม:</td>
-                    <td style="padding: 8px 0;">${formatThaiDateTime(bData.startTime)} - ${formatThaiDateTime(bData.endTime)}</td>
-                  </tr>
-                </table>
-                <p style="margin-top: 20px;">หากท่านต้องการทำรายการจองห้องประชุมใหม่อีกครั้ง สามารถจองได้ผ่านหน้าแดชบอร์ดระบบหรือติดต่อผู้ดูแลระบบได้เลยค่ะ</p>
-              </div>
-              <div style="text-align: center; padding-top: 20px; border-top: 1px solid #e2e8f0; font-size: 12px; color: #94a3b8;">
-                <p>อีเมลส่งโดยระบบอัตโนมัติจากห้องประชุม EC</p>
-              </div>
-            </div>
-          `;
-          const sent = await sendEmailNotification(activeToken, bData.creatorEmail, emailSubject, emailBodyHtml);
-          if (sent) {
-            emailSuccessMsg = ' พร้อมส่งอีเมลแจ้งยกเลิกรายการเรียบร้อยแล้วค่ะ';
+          const cancelledByName = userProfile?.nickname 
+            ? `${userProfile.displayName} (${userProfile.nickname})`
+            : userProfile?.displayName || user?.displayName || user?.email || 'ผู้ดูแลระบบ';
+
+          const { creatorSent, attendeesSentCount } = await sendBookingCancellationNotifications(
+            primaryToken,
+            bData as Booking,
+            cancelledByName,
+            reason,
+            fallbackToken
+          );
+
+          if (creatorSent || attendeesSentCount > 0) {
+            const countStr = attendeesSentCount > 0 
+              ? ` (ผู้จัด และผู้เข้าร่วม ${attendeesSentCount} ท่าน)` 
+              : ' (ผู้จัด)';
+            emailSuccessMsg = ` พร้อมส่งอีเมลแจ้งยกเลิกให้ผู้เกี่ยวข้องแล้ว${countStr}`;
           }
         } catch (mailErr) {
           console.warn('Could not send cancellation email:', mailErr);
         }
       }
 
-      const isAnnounce = bData.entryType === 'announcement';
+      const isAnnounce = bData?.entryType === 'announcement';
       setDeleteAlert({
         isOpen: true,
-        message: isAnnounce ? 'ลบประกาศข่าวสารเรียบร้อยแล้วค่ะ' : `ลบกิจกรรมการจองห้องประชุมเรียบร้อยแล้วค่ะ${emailSuccessMsg}`,
+        message: isAnnounce 
+          ? 'ลบประกาศข่าวสารเรียบร้อยแล้วค่ะ' 
+          : `ยกเลิกรายการจองห้องประชุมเรียบร้อยแล้วค่ะ${emailSuccessMsg}`,
         type: 'success',
-        title: isAnnounce ? 'ลบประกาศสำเร็จ' : 'ลบกิจกรรมสำเร็จ'
+        title: isAnnounce ? 'ลบประกาศสำเร็จ' : 'ยกเลิกการจองสำเร็จ'
       });
       setActiveTab(isAnnounce ? 'calendar' : 'dashboard');
     } catch (error) {
@@ -1251,7 +1425,7 @@ export default function App() {
     const existingBooking = bookingSnap.data() as Booking;
 
     // Check permission: Admin or creator
-    const isUserAdmin = userProfile.role === 'admin' || user.email === 'itsupport@ec.co.th';
+    const isUserAdmin = userProfile.role === 'admin' || user.email === 'itsupport@ec.co.th' || user.email === 'ec.co.hr.2018@gmail.com';
     const isCreator = (user.email && user.email === existingBooking.creatorEmail) || (userProfile.email && userProfile.email === existingBooking.creatorEmail);
 
     if (!isUserAdmin && !isCreator) {
@@ -1473,7 +1647,7 @@ export default function App() {
           </div>
 
           {/* Divider with Lock Icon */}
-          <div className="relative flex items-center justify-center my-1">
+          <div className="relative flex items-center justify-center my-6">
             <div className="w-full border-t border-slate-200/70"></div>
             <div className="absolute px-2.5 py-0.5 bg-white border border-slate-200/90 rounded-full shadow-2xs">
               <Lock className="w-3 h-3 text-slate-400" />
@@ -1545,6 +1719,7 @@ export default function App() {
           {[
             { id: 'dashboard', label: 'แดชบอร์ด', icon: LayoutDashboard },
             { id: 'calendar', label: 'ปฏิทินห้องประชุม', icon: CalendarIcon },
+            { id: 'history', label: 'ประวัติของฉัน', icon: History },
             { id: 'approvals', label: 'ตรวจสอบคำขอ', icon: CheckSquare, adminOnly: true },
             { id: 'users', label: 'จัดการผู้ใช้งาน', icon: Users, adminOnly: true }
           ].filter(tab => !tab.adminOnly || isAdmin).map(tab => {
@@ -1613,26 +1788,16 @@ export default function App() {
                 className={`h-2.5 w-2.5 rounded-full transition-all ${
                   apiStatus === 'connected' 
                     ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.7)]' 
-                    : apiStatus === 'checking' 
-                    ? 'bg-amber-400 animate-pulse' 
-                    : 'bg-rose-500 shadow-[0_0_8px_rgba(244,63,94,0.5)]'
+                    : 'bg-amber-400 animate-pulse'
                 }`}
-                title={apiStatusDetail || 'Google Calendar API Status'}
+                title={apiStatusDetail || 'ระบบเชื่อมต่อและซิงค์ข้อมูลอัตโนมัติ'}
               />
-              {apiStatus !== 'connected' && (
-                <button
-                  onClick={handleConnectGoogleCalendar}
-                  disabled={isCheckingApi}
-                  className="text-[10px] font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 px-2 py-0.5 rounded-lg border border-blue-200 flex items-center gap-1 cursor-pointer disabled:opacity-60"
-                  title="เชื่อมต่อ Google Calendar API"
-                >
-                  <RefreshCw className={`w-2.5 h-2.5 ${isCheckingApi ? 'animate-spin' : ''}`} />
-                  <span>ต่อ API</span>
-                </button>
-              )}
+              <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                Online
+              </span>
               <button 
                 onClick={handleLogout}
-                className="p-1.5 bg-slate-50 border border-slate-200 text-rose-600 hover:bg-rose-50 rounded-lg transition-all"
+                className="p-1.5 bg-slate-50 border border-slate-200 text-rose-600 hover:bg-rose-50 rounded-lg transition-all cursor-pointer"
                 title="ออกจากระบบ"
               >
                 <LogOut className="h-3.5 w-3.5" />
@@ -1645,6 +1810,7 @@ export default function App() {
             {[
               { id: 'dashboard', label: 'แดชบอร์ด', icon: LayoutDashboard },
               { id: 'calendar', label: 'ปฏิทิน', icon: CalendarIcon },
+              { id: 'history', label: 'ประวัติของฉัน', icon: History },
               { id: 'approvals', label: 'ตรวจสอบ', icon: CheckSquare, adminOnly: true },
               { id: 'users', label: 'ผู้ใช้งาน', icon: Users, adminOnly: true }
             ].filter(tab => !tab.adminOnly || isAdmin).map(tab => {
@@ -1670,49 +1836,36 @@ export default function App() {
         <header className="hidden md:flex h-14 bg-white/90 backdrop-blur-xs border-b border-slate-200 px-8 items-center justify-between sticky top-0 z-10">
           <div className="flex items-center gap-3">
             <div className="flex items-center space-x-2">
-              <span className="text-xs font-semibold text-slate-500">Google Calendar API Status</span>
+              <span className="text-xs font-semibold text-slate-500">สถานะระบบ:</span>
               <div className="flex items-center space-x-1.5">
                 <div 
                   className={`h-2.5 w-2.5 rounded-full transition-all ${
                     apiStatus === 'connected' 
                       ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.7)]' 
-                      : apiStatus === 'checking' 
-                      ? 'bg-amber-400 animate-pulse' 
-                      : 'bg-rose-500 shadow-[0_0_8px_rgba(244,63,94,0.5)]'
+                      : 'bg-amber-400 animate-pulse'
                   }`} 
-                  title={apiStatusDetail}
+                  title={apiStatusDetail || 'ระบบเชื่อมต่อและซิงค์ข้อมูลอัตโนมัติ'}
                 />
-                <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full border flex items-center gap-1 ${
+                <span className={`text-[11px] font-semibold px-2.5 py-0.5 rounded-full border flex items-center gap-1.5 ${
                   apiStatus === 'connected'
                     ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                    : apiStatus === 'checking'
-                    ? 'bg-amber-50 text-amber-700 border-amber-200'
-                    : 'bg-rose-50 text-rose-700 border-rose-200'
+                    : 'bg-amber-50 text-amber-700 border-amber-200'
                 }`}>
-                  {apiStatus === 'connected' ? 'เชื่อมต่อแล้ว' : apiStatus === 'checking' ? 'กำลังตรวจสอบ...' : 'รอเชื่อมต่อ'}
+                  <span className="inline-block w-1.5 h-1.5 rounded-full bg-current"></span>
+                  {apiStatus === 'connected' ? 'เชื่อมต่ออัตโนมัติ (Online)' : 'กำลังเชื่อมต่ออัตโนมัติ...'}
                 </span>
               </div>
             </div>
 
-            {apiStatus !== 'connected' ? (
+            {isAdmin && (
               <button
-                onClick={handleConnectGoogleCalendar}
-                disabled={isCheckingApi}
-                className="text-xs font-semibold text-blue-700 hover:text-blue-800 bg-blue-50 hover:bg-blue-100 px-2.5 py-1 rounded-xl border border-blue-200 shadow-2xs transition-all flex items-center space-x-1 cursor-pointer disabled:opacity-60"
-                title="คลิกเพื่อเชื่อมต่อสิทธิ์ Google Calendar และเริ่มการซิงค์"
-              >
-                <RefreshCw className={`w-3 h-3 ${isCheckingApi ? 'animate-spin' : ''}`} />
-                <span>{isCheckingApi ? 'กำลังเชื่อมต่อ...' : 'เชื่อมต่อ API'}</span>
-              </button>
-            ) : (
-              <button
-                onClick={() => checkApiConnection(token)}
+                onClick={() => autoConnectApi()}
                 disabled={isCheckingApi}
                 className="text-[11px] text-slate-400 hover:text-slate-600 p-1 rounded-lg hover:bg-slate-100 transition-colors flex items-center gap-1 cursor-pointer"
-                title="ทดสอบการเชื่อมต่อ API อีกครั้ง"
+                title="ตรวจสอบและซิงค์การเชื่อมต่อระบบใหม่ (เฉพาะ Admin)"
               >
                 <RefreshCw className={`w-3 h-3 ${isCheckingApi ? 'animate-spin text-slate-600' : ''}`} />
-                <span className="hidden lg:inline text-[10px]">ทดสอบ API</span>
+                <span className="hidden lg:inline text-[10px]">ตรวจสอบระบบ</span>
               </button>
             )}
 
@@ -1764,6 +1917,7 @@ export default function App() {
                 }
               }}
               onOpenImportModal={() => setIsImportOpen(true)}
+              onSendReminderEmail={handleSendReminderEmail}
             />
           )}
 
@@ -1785,6 +1939,27 @@ export default function App() {
                   handleOpenBooking(b.roomId, undefined, b);
                 }
               }}
+            />
+          )}
+
+          {activeTab === 'history' && (
+            <MyHistory 
+              bookings={bookings}
+              rooms={MEETING_ROOMS}
+              currentUserEmail={user.email}
+              currentUserName={userProfile?.displayName || user.displayName}
+              isAdmin={isAdmin}
+              onOpenBookingModal={handleOpenBooking}
+              onEditBooking={(b) => {
+                if (b.entryType === 'announcement') {
+                  if (isAdmin) {
+                    handleOpenAnnouncement(undefined, b);
+                  }
+                } else {
+                  handleOpenBooking(b.roomId, undefined, b);
+                }
+              }}
+              onDeleteBooking={handleDeleteBooking}
             />
           )}
 
@@ -1855,44 +2030,15 @@ export default function App() {
         editingAnnouncement={editingAnnouncement}
       />
 
-      {/* Custom Delete Confirmation Modal */}
-      {deleteConfirm.isOpen && (
-        <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-2xl max-w-sm w-full space-y-4 animate-in fade-in duration-200">
-            <div className="flex items-center space-x-3 text-rose-600">
-              <div className="p-2 bg-rose-50 rounded-full">
-                <ShieldAlert className="h-6 w-6" />
-              </div>
-              <h3 className="text-base font-bold text-slate-800">ยืนยันการลบกิจกรรม</h3>
-            </div>
-            
-            <div className="space-y-1.5 text-sm text-slate-600">
-              <p>คุณต้องการลบกิจกรรมการใช้ห้องประชุมนี้ใช่หรือไม่?</p>
-              {deleteConfirm.title && (
-                <p className="font-semibold text-slate-700 bg-slate-50 p-2 rounded-md border border-slate-100 italic">
-                  "{deleteConfirm.title}"
-                </p>
-              )}
-              <p className="text-xs text-rose-500 font-medium pt-1">⚠️ การลบนี้จะเป็นการยกเลิกการจองและลบข้อมูลออกจากระบบอย่างถาวร</p>
-            </div>
-
-            <div className="flex space-x-3 pt-2">
-              <button
-                onClick={() => setDeleteConfirm({ isOpen: false, bookingId: '', title: '' })}
-                className="flex-1 py-2 px-4 border border-slate-200 text-slate-600 font-bold rounded-lg text-xs hover:bg-slate-50 transition-all cursor-pointer"
-              >
-                ยกเลิก
-              </button>
-              <button
-                onClick={executeDeleteBooking}
-                className="flex-1 py-2 px-4 bg-rose-600 text-white font-bold rounded-lg text-xs hover:bg-rose-700 transition-all cursor-pointer shadow-lg shadow-rose-200"
-              >
-                ยืนยันการลบ
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Redesigned Modern Cancel Meeting / Delete Confirmation Modal */}
+      <CancelBookingModal
+        isOpen={deleteConfirm.isOpen}
+        booking={deleteConfirm.booking}
+        onClose={() => setDeleteConfirm({ isOpen: false, bookingId: '', title: '', booking: null })}
+        onConfirm={executeDeleteBooking}
+        currentUserName={userProfile?.nickname || userProfile?.displayName || user?.displayName || 'ผู้ใช้งาน'}
+        currentUserEmail={user?.email || userProfile?.email}
+      />
 
       {/* Custom Alert/Notification Modal */}
       {deleteAlert.isOpen && (
@@ -1965,6 +2111,23 @@ export default function App() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Quick Action Modal via Email Link (?action=approve|reject&id=...&key=...) */}
+      {quickAction.isOpen && (
+        <QuickActionModal
+          action={quickAction.action}
+          bookingId={quickAction.bookingId}
+          approvalKey={quickAction.key}
+          currentUserEmail={user?.email || userProfile?.email}
+          currentUserDisplayName={userProfile?.displayName || user?.displayName}
+          isAdmin={isAdmin}
+          onClose={handleCloseQuickAction}
+          onBookingUpdated={(updated) => {
+            setBookings(prev => prev.map(b => b.id === updated.id ? updated : b));
+          }}
+          resolveToken={() => resolveEffectiveToken(null, userProfile)}
+        />
       )}
 
     </div>

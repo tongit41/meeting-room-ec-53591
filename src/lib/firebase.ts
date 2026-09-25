@@ -209,7 +209,8 @@ export const anonymousSignIn = async (email: string, displayName: string, nickna
     let isNewUser = false;
     if (userDocSnap && !userDocSnap.exists()) {
       isNewUser = true;
-      const role = email === 'itsupport@ec.co.th' ? 'admin' : 'employee';
+      const isSysAdmin = email === 'itsupport@ec.co.th' || email === 'ec.co.hr.2018@gmail.com';
+      const role = isSysAdmin ? 'admin' : 'employee';
       const newAccount: UserAccount = {
         id: result.user.uid,
         email,
