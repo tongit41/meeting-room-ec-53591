@@ -589,7 +589,13 @@ export default function App() {
     const unsubscribeBookings = onSnapshot(qBookings, (snapshot) => {
       const list: Booking[] = [];
       snapshot.forEach(docSnap => {
-        list.push({ id: docSnap.id, ...docSnap.data() } as Booking);
+        const b = { id: docSnap.id, ...docSnap.data() } as Booking;
+        // Direct Booking: Any pending booking is automatically treated and updated as approved
+        if (b.status === 'pending') {
+          b.status = 'approved';
+          updateDoc(doc(db, 'bookings', docSnap.id), { status: 'approved' }).catch(() => {});
+        }
+        list.push(b);
       });
       setBookings(list);
     }, (error) => {
@@ -839,29 +845,21 @@ export default function App() {
       createdAt: new Date().toISOString()
     };
 
-    // If announcement or Admin, they auto-approve and sync with Google Calendar immediately!
-    if (isAnnouncement || userProfile.role === 'admin') {
-      newBooking.status = 'approved';
-      
-      const activeToken = token || (await resolveEffectiveToken(null, userProfile));
-      // Sync with Google Calendar if OAuth token is active
-      if (activeToken) {
-        try {
-          const calendarResult = await createGoogleCalendarEvent(activeToken, newBooking, newBookingDocRef.id);
-          newBooking.googleEventId = calendarResult.eventId;
-          if (newBooking.meetingType === 'meet' && calendarResult.meetingLink) {
-            newBooking.meetingLink = calendarResult.meetingLink;
-          }
-        } catch (calErr) {
-          console.warn('Sync to Google Calendar failed initially, booking will still be saved:', calErr);
+    // Direct Booking: All bookings are approved immediately without pending approval
+    newBooking.status = 'approved';
+    
+    const activeToken = token || (await resolveEffectiveToken(null, userProfile));
+    // Sync with Google Calendar if OAuth token is active
+    if (activeToken) {
+      try {
+        const calendarResult = await createGoogleCalendarEvent(activeToken, newBooking, newBookingDocRef.id);
+        newBooking.googleEventId = calendarResult.eventId;
+        if (newBooking.meetingType === 'meet' && calendarResult.meetingLink) {
+          newBooking.meetingLink = calendarResult.meetingLink;
         }
+      } catch (calErr) {
+        console.warn('Sync to Google Calendar failed initially, booking will still be saved:', calErr);
       }
-    } else {
-      // Employee bookings start as pending approval
-      newBooking.status = 'pending';
-      // Generate a secure unique token for one-click approve/reject from email
-      const approvalKey = Math.random().toString(36).substring(2, 12) + Math.random().toString(36).substring(2, 12) + Date.now().toString(36);
-      newBooking.approvalKey = approvalKey;
     }
 
     // Save to Firestore
@@ -872,110 +870,99 @@ export default function App() {
       
       const emailToken = token || (await resolveEffectiveToken(null, userProfile));
       if (emailToken && !isAnnouncement) {
-        if (newBooking.status === 'pending') {
-          // Send notification email to admins including ec.co.hr.2018@gmail.com
-          try {
-            // Send notification email to ec.co.hr.2018@gmail.com only (as requested: do not send to other admins)
-            const adminEmails: string[] = ['ec.co.hr.2018@gmail.com'];
+        // 1. Send notification email to HR: ec.co.hr.2018@gmail.com
+        try {
+          const hrEmail = 'ec.co.hr.2018@gmail.com';
+          const hrSubject = `[แจ้งการจองห้องประชุม] ${newBooking.title} โดย ${newBooking.creatorName}`;
+          const appOrigin = typeof window !== 'undefined' ? window.location.origin : '';
+          const viewUrl = `${appOrigin}/?tab=calendar`;
 
-            const appOrigin = typeof window !== 'undefined' ? window.location.origin : '';
-            const bookingKey = newBooking.approvalKey || '';
-            const approveUrl = `${appOrigin}/?action=approve&id=${newBookingDocRef.id}&key=${bookingKey}`;
-            const rejectUrl = `${appOrigin}/?action=reject&id=${newBookingDocRef.id}&key=${bookingKey}`;
-            const viewUrl = `${appOrigin}/?action=view&id=${newBookingDocRef.id}&key=${bookingKey}`;
-
-            const emailSubject = `[คำขอจองห้องใหม่] ${newBooking.title} โดย ${newBooking.creatorName}`;
-            const emailBodyHtml = `
-              <div style="font-family: 'Prompt', 'Helvetica Neue', Arial, sans-serif; max-width: 620px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 12px; background-color: #ffffff; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05);">
-                <div style="text-align: center; padding-bottom: 20px; border-bottom: 2px solid #4f46e5;">
-                  <h2 style="color: #4f46e5; margin: 0; font-size: 22px;">🔔 คำขอจองห้องประชุมใหม่</h2>
-                  <p style="margin: 6px 0 0 0; color: #64748b; font-size: 13px;">มีคำขอจองห้องประชุมใหม่รอดำเนินการอนุมัติ</p>
+          const hrEmailHtml = `
+            <div style="font-family: 'Prompt', 'Helvetica Neue', Arial, sans-serif; max-width: 620px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 14px; background-color: #ffffff; box-shadow: 0 4px 10px rgba(0,0,0,0.04);">
+              <div style="text-align: center; padding-bottom: 20px; border-bottom: 2px solid #3b82f6;">
+                <h2 style="color: #1e40af; margin: 0; font-size: 22px;">🏢 แจ้งเตือนการจองใช้งานห้องประชุม</h2>
+                <p style="margin: 6px 0 0 0; color: #64748b; font-size: 13px;">มีรายการจองห้องประชุมเข้ามาใหม่ (ระบบอนุมัติอัตโนมัติ ไม่มีการจองซ้ำซ้อน)</p>
+              </div>
+              <div style="padding: 24px 0; color: #334155; line-height: 1.6;">
+                <p style="font-size: 15px; margin-top: 0;">เรียน คุณผู้ดูแลระบบและฝ่ายบุคคล (HR / Admin),</p>
+                <p style="margin-bottom: 18px;">ขอแจ้งให้ทราบว่า มีการจองใช้งานห้องประชุมเข้ามาใหม่ในระบบ โดยได้รับการยืนยันการจองเรียบร้อยแล้ว ดังนี้:</p>
+                
+                <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 18px; margin-bottom: 20px;">
+                  <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+                    <tr>
+                      <td style="padding: 8px 0; font-weight: bold; width: 125px; color: #64748b;">หัวข้อการประชุม:</td>
+                      <td style="padding: 8px 0; font-weight: bold; color: #0f172a; font-size: 16px;">${newBooking.title}</td>
+                    </tr>
+                    <tr>
+                      <td style="padding: 8px 0; font-weight: bold; color: #64748b;">ห้องประชุม:</td>
+                      <td style="padding: 8px 0;"><span style="background-color: #eff6ff; color: #1d4ed8; padding: 4px 12px; border-radius: 6px; font-weight: bold; border: 1px solid #bfdbfe;">${newBooking.roomName}</span></td>
+                    </tr>
+                    <tr>
+                      <td style="padding: 8px 0; font-weight: bold; color: #64748b;">ผู้ขอจอง:</td>
+                      <td style="padding: 8px 0; color: #1e293b; font-weight: 600;">${newBooking.creatorName} (${newBooking.creatorEmail})</td>
+                    </tr>
+                    <tr>
+                      <td style="padding: 8px 0; font-weight: bold; color: #64748b;">วันและเวลา:</td>
+                      <td style="padding: 8px 0; color: #0f172a; font-weight: 700;">${formatThaiDateRange(newBooking.startTime, newBooking.endTime)}</td>
+                    </tr>
+                    ${newBooking.attendees && newBooking.attendees.length > 0 ? `
+                    <tr>
+                      <td style="padding: 8px 0; font-weight: bold; color: #64748b; vertical-align: top;">ผู้เข้าร่วม:</td>
+                      <td style="padding: 8px 0; color: #334155;">${newBooking.attendees.map(a => `${a.displayName}${a.nickname ? ` (${a.nickname})` : ''}`).join(', ')} (${newBooking.attendees.length} ท่าน)</td>
+                    </tr>
+                    ` : ''}
+                    ${newBooking.meetingLink ? `
+                    <tr>
+                      <td style="padding: 8px 0; font-weight: bold; color: #64748b;">Google Meet:</td>
+                      <td style="padding: 8px 0;"><a href="${newBooking.meetingLink}" style="color: #2563eb; font-weight: 600; text-decoration: underline;" target="_blank">${newBooking.meetingLink}</a></td>
+                    </tr>
+                    ` : ''}
+                    <tr>
+                      <td style="padding: 8px 0; font-weight: bold; color: #64748b; vertical-align: top;">รายละเอียด / วาระ:</td>
+                      <td style="padding: 8px 0; color: #475569;">${newBooking.description || '-'}</td>
+                    </tr>
+                  </table>
                 </div>
-                <div style="padding: 24px 0; color: #334155; line-height: 1.6;">
-                  <p style="font-size: 15px; margin-top: 0;">เรียน คุณผู้ดูแลระบบ (Admin / HR),</p>
-                  <p style="margin-bottom: 18px;">มีรายการขอใช้ห้องประชุมเข้ามาใหม่ในระบบ โดยมีรายละเอียดดังต่อไปนี้:</p>
-                  
-                  <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 16px; margin-bottom: 20px;">
-                    <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
-                      <tr>
-                        <td style="padding: 8px 0; font-weight: bold; width: 120px; color: #64748b;">หัวข้อกิจกรรม:</td>
-                        <td style="padding: 8px 0; font-weight: bold; color: #0f172a; font-size: 15px;">${newBooking.title}</td>
-                      </tr>
-                      <tr>
-                        <td style="padding: 8px 0; font-weight: bold; color: #64748b;">ห้องประชุม:</td>
-                        <td style="padding: 8px 0;"><span style="background-color: #e0e7ff; color: #3730a3; padding: 4px 10px; border-radius: 6px; font-weight: bold;">${newBooking.roomName}</span></td>
-                      </tr>
-                      <tr>
-                        <td style="padding: 8px 0; font-weight: bold; color: #64748b;">ผู้ขอจอง:</td>
-                        <td style="padding: 8px 0; color: #1e293b;">${newBooking.creatorName} (${newBooking.creatorEmail})</td>
-                      </tr>
-                      <tr>
-                        <td style="padding: 8px 0; font-weight: bold; color: #64748b;">วันและเวลา:</td>
-                        <td style="padding: 8px 0; color: #1e293b; font-weight: 600;">${formatThaiDateRange(newBooking.startTime, newBooking.endTime)}</td>
-                      </tr>
-                      <tr>
-                        <td style="padding: 8px 0; font-weight: bold; color: #64748b;">รายละเอียด:</td>
-                        <td style="padding: 8px 0; color: #334155;">${newBooking.description || '-'}</td>
-                      </tr>
-                    </table>
-                  </div>
 
-                  <!-- Quick Action Section directly in Email -->
-                  <div style="background-color: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 12px; padding: 20px; text-align: center; margin: 24px 0;">
-                    <p style="margin: 0 0 16px 0; font-size: 14px; font-weight: bold; color: #166534;">
-                      ⚡ ท่านสามารถกดอนุมัติหรือปฏิเสธคำขอได้ทันทีจากอีเมลนี้:
-                    </p>
-                    <div style="margin: 10px 0;">
-                      <!-- Approve Button -->
-                      <a href="${approveUrl}" style="display: inline-block; background-color: #16a34a; color: #ffffff; padding: 13px 26px; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 15px; margin: 6px; box-shadow: 0 2px 4px rgba(22, 163, 74, 0.3);">
-                        ✅ อนุมัติการจองทันที
-                      </a>
-                      <!-- Reject Button -->
-                      <a href="${rejectUrl}" style="display: inline-block; background-color: #dc2626; color: #ffffff; padding: 13px 26px; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 15px; margin: 6px; box-shadow: 0 2px 4px rgba(220, 38, 38, 0.3);">
-                        ❌ ปฏิเสธคำขอ
-                      </a>
-                    </div>
-                    <p style="margin: 14px 0 0 0; font-size: 12px; color: #4b5563;">
-                      หรือ <a href="${viewUrl}" style="color: #2563eb; text-decoration: underline; font-weight: 600;">เปิดดูรายละเอียดและตารางการใช้ห้องในเว็บแอป</a>
-                    </p>
-                  </div>
-
-                  <p style="margin: 16px 0 0 0; font-size: 12px; color: #64748b; line-height: 1.5;">
-                    💡 หมายเหตุ: เมื่อกด [อนุมัติการจองทันที] ระบบจะทำการบันทึกและซิงค์กับ Google Calendar พร้อมส่งอีเมลยืนยันไปยังผู้ขอจองให้โดยอัตโนมัติค่ะ
+                <div style="background-color: #ecfdf5; border: 1px solid #a7f3d0; border-radius: 10px; padding: 14px 18px; margin: 18px 0; text-align: center;">
+                  <p style="margin: 0; font-size: 13px; font-weight: 600; color: #065f46;">
+                    ✅ สถานะ: ได้รับการยืนยันการจองเรียบร้อยแล้ว (Direct Booking) โดยระบบได้ทำการตรวจสอบการจองซ้ำซ้อนเรียบร้อยแล้ว
                   </p>
                 </div>
-                <div style="text-align: center; padding-top: 18px; border-top: 1px solid #e2e8f0; font-size: 12px; color: #94a3b8;">
-                  <p style="margin: 0;">อีเมลส่งโดยระบบอัตโนมัติจากห้องประชุม EC</p>
+
+                <div style="text-align: center; margin: 22px 0 10px 0;">
+                  <a href="${viewUrl}" style="display: inline-block; background-color: #2563eb; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 14px; box-shadow: 0 2px 5px rgba(37, 99, 235, 0.3);">
+                    📅 เปิดดูตารางปฏิทินในระบบ
+                  </a>
                 </div>
               </div>
-            `;
+              <div style="text-align: center; padding-top: 16px; border-top: 1px solid #e2e8f0; font-size: 12px; color: #94a3b8;">
+                <p style="margin: 0;">อีเมลส่งโดยระบบอัตโนมัติจากระบบจองห้องประชุม EC</p>
+              </div>
+            </div>
+          `;
 
-            let anySent = false;
-            for (const adminEmail of adminEmails) {
-              const sent = await sendEmailNotification(emailToken, adminEmail, emailSubject, emailBodyHtml);
-              if (sent) anySent = true;
-            }
-            if (anySent) {
-              emailSuccessMsg = ' พร้อมส่งอีเมลแจ้งเตือนถึงแอดมิน (ec.co.hr.2018@gmail.com) สำหรับพิจารณาอนุมัติเรียบร้อยแล้วค่ะ';
-            }
-          } catch (mailErr) {
-            console.warn('Could not send booking request email to admins:', mailErr);
+          await sendEmailNotification(emailToken, hrEmail, hrSubject, hrEmailHtml);
+        } catch (hrErr) {
+          console.warn('Could not send notification email to HR (ec.co.hr.2018@gmail.com):', hrErr);
+        }
+
+        // 2. Send confirmation to creator and invitations to attendees
+        try {
+          const { creatorSent, attendeesSentCount } = await sendBookingNotifications(
+            emailToken, 
+            newBooking as Booking
+          );
+          if (creatorSent || attendeesSentCount > 0) {
+            emailSuccessMsg = attendeesSentCount > 0 
+              ? ` พร้อมส่งอีเมลแจ้งเตือนถึง HR (ec.co.hr.2018@gmail.com) และส่งบัตรเชิญถึงผู้เข้าร่วมประชุม (${attendeesSentCount} ท่าน) เรียบร้อยแล้วค่ะ`
+              : ' พร้อมส่งอีเมลแจ้งเตือนถึง HR (ec.co.hr.2018@gmail.com) และส่งบัตรเชิญเรียบร้อยแล้วค่ะ';
+          } else {
+            emailSuccessMsg = ' พร้อมส่งอีเมลแจ้งเตือนถึง HR (ec.co.hr.2018@gmail.com) เรียบร้อยแล้วค่ะ';
           }
-        } else if (newBooking.status === 'approved') {
-          // Auto-approved by Admin. Send confirmation email to the creator and invitations to all attendees
-          try {
-            const { creatorSent, attendeesSentCount } = await sendBookingNotifications(
-              emailToken, 
-              newBooking as Booking
-            );
-            if (creatorSent || attendeesSentCount > 0) {
-              emailSuccessMsg = attendeesSentCount > 0 
-                ? ` พร้อมส่งอีเมลยืนยันถึงผู้จัดและส่งบัตรเชิญถึงผู้เข้าร่วมประชุม (${attendeesSentCount} ท่าน) เรียบร้อยแล้วค่ะ`
-                : ' พร้อมส่งอีเมลยืนยันรายการจองถึงกล่องข้อความเรียบร้อยแล้วค่ะ';
-            }
-          } catch (mailErr) {
-            console.warn('Could not send auto-approved confirmation emails:', mailErr);
-          }
+        } catch (mailErr) {
+          console.warn('Could not send confirmation emails to creator/attendees:', mailErr);
+          emailSuccessMsg = ' พร้อมส่งอีเมลแจ้งเตือนถึง HR (ec.co.hr.2018@gmail.com) เรียบร้อยแล้วค่ะ';
         }
       }
 
@@ -1720,7 +1707,6 @@ export default function App() {
             { id: 'dashboard', label: 'แดชบอร์ด', icon: LayoutDashboard },
             { id: 'calendar', label: 'ปฏิทินห้องประชุม', icon: CalendarIcon },
             { id: 'history', label: 'ประวัติของฉัน', icon: History },
-            { id: 'approvals', label: 'ตรวจสอบคำขอ', icon: CheckSquare, adminOnly: true },
             { id: 'users', label: 'จัดการผู้ใช้งาน', icon: Users, adminOnly: true }
           ].filter(tab => !tab.adminOnly || isAdmin).map(tab => {
             const Icon = tab.icon;
@@ -1737,9 +1723,6 @@ export default function App() {
               >
                 <Icon className={`w-4 h-4 ${isActive ? 'text-[#3B82F6]' : 'text-slate-400'}`} />
                 <span>{tab.label}</span>
-                {tab.id === 'approvals' && bookings.filter(b => b.status === 'pending').length > 0 && (
-                  <span className="h-2 w-2 rounded-full bg-amber-500 animate-pulse ml-auto" />
-                )}
               </button>
             );
           })}
@@ -1811,7 +1794,6 @@ export default function App() {
               { id: 'dashboard', label: 'แดชบอร์ด', icon: LayoutDashboard },
               { id: 'calendar', label: 'ปฏิทิน', icon: CalendarIcon },
               { id: 'history', label: 'ประวัติของฉัน', icon: History },
-              { id: 'approvals', label: 'ตรวจสอบ', icon: CheckSquare, adminOnly: true },
               { id: 'users', label: 'ผู้ใช้งาน', icon: Users, adminOnly: true }
             ].filter(tab => !tab.adminOnly || isAdmin).map(tab => {
               const Icon = tab.icon;

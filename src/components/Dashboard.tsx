@@ -462,11 +462,12 @@ export default function Dashboard({
 
         <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-[0_4px_20px_-2px_rgba(15,23,42,0.05)] flex items-center justify-between">
           <div className="space-y-1">
-            <span className="text-xs text-slate-500 font-medium block">รออนุมัติการจอง</span>
-            <span className="text-2xl font-bold text-[#F59E0B]">{pendingBookings.length} รายการ</span>
+            <span className="text-xs text-slate-500 font-medium block">ระบบการจอง</span>
+            <span className="text-sm sm:text-base font-bold text-emerald-600 block">จองได้ทันที (Direct Booking)</span>
+            <span className="text-[10px] text-slate-400 block">ป้องกันการจองซ้ำซ้อนอัตโนมัติ</span>
           </div>
-          <div className="h-11 w-11 bg-[#FEF3C7] text-[#F59E0B] rounded-xl flex items-center justify-center border border-amber-200">
-            <AlertCircle className="h-5 w-5" />
+          <div className="h-11 w-11 bg-emerald-50 text-emerald-600 rounded-xl flex items-center justify-center border border-emerald-200">
+            <CheckCircle className="h-5 w-5" />
           </div>
         </div>
 

@@ -258,7 +258,7 @@ export default function BookingModal({
   const handlePlatformChange = (p: MeetingPlatform) => {
     setMeetingPlatform(p);
     if (p === 'meet') {
-      setCustomLink('ลิงก์ Google Meet จะถูกสร้างโดยอัตโนมัติเมื่ออนุมัติ');
+      setCustomLink('ลิงก์ Google Meet จะถูกสร้างขึ้นโดยอัตโนมัติทันทีเมื่อทำการจอง');
     } else {
       setCustomLink('');
     }
@@ -863,7 +863,7 @@ export default function BookingModal({
                   placeholder={
                     meetingPlatform === 'external' 
                       ? "วางลิงก์วิดีอลคอลภายนอกที่นี่ (เช่น Zoom, MS Teams, Line ฯลฯ)" 
-                      : "ลิงก์ Google Meet จะถูกสร้างโดยอัตโนมัติเมื่ออนุมัติ"
+                      : "ลิงก์ Google Meet จะถูกสร้างขึ้นโดยอัตโนมัติทันทีเมื่อทำการจอง"
                   }
                   className="bg-transparent border-none text-xs text-slate-600 focus:outline-none w-full font-mono select-all disabled:opacity-80"
                 />
@@ -994,17 +994,15 @@ export default function BookingModal({
             </div>
           </div>
 
-          {/* Informational Warning */}
-          <div className="bg-amber-50 border border-amber-200 p-3 rounded-xl flex items-start space-x-2.5">
-            <Info className="h-4.5 w-4.5 text-amber-500 shrink-0 mt-0.5" />
+          {/* Direct Booking Information Banner */}
+          <div className="bg-emerald-50 border border-emerald-200 p-3.5 rounded-xl flex items-start space-x-2.5">
+            <CheckCircle className="h-4.5 w-4.5 text-emerald-600 shrink-0 mt-0.5" />
             <div className="space-y-0.5">
-              <h4 className="font-bold text-amber-800 text-xs">
-                {isAdmin ? 'การยืนยันการจองโดยแอดมิน' : 'ต้องได้รับการอนุมัติจากผู้ดูแลระบบ'}
+              <h4 className="font-bold text-emerald-900 text-xs">
+                ระบบอนุมัติการจองทันที (Direct Booking)
               </h4>
-              <p className="text-[11px] text-amber-700">
-                {isAdmin 
-                  ? 'คุณล็อกอินในฐานะผู้ดูแลระบบ การจองนี้จะได้รับการอนุมัติโดยอัตโนมัติและซิงค์ขึ้น Google Calendar ทันที' 
-                  : 'เนื่องจากสิทธิ์ของคุณเป็นพนักงานทั่วไป การจองห้องนี้จะส่งเรื่องรอดำเนินการเพื่อให้แอดมินตรวจสอบก่อน จึงจะถูกซิงค์ไปยังปฏิทิน'}
+              <p className="text-[11px] text-emerald-700 leading-relaxed">
+                การจองห้องประชุมจะได้รับการยืนยันและบันทึกลงปฏิทินทันทีโดยไม่ต้องรออนุมัติ พร้อมระบบป้องกันการจองซ้ำซ้อน และจะส่งอีเมลแจ้งเตือนไปยัง HR (ec.co.hr.2018@gmail.com) และผู้เข้าร่วมทุกคนโดยอัตโนมัติค่ะ
               </p>
             </div>
           </div>

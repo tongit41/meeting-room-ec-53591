@@ -626,21 +626,10 @@ export default function CalendarView({
                   <div className="flex flex-wrap items-center gap-1.5">
                     {/* Status Badge */}
                     {!isAnnounce && (
-                      isApproved ? (
-                        <span className="inline-flex items-center text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
-                          <CheckCircle className="h-3 w-3 mr-1 text-emerald-600" />
-                          อนุมัติแล้ว
-                        </span>
-                      ) : isPending ? (
-                        <span className="inline-flex items-center text-[10px] font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full border border-amber-200">
-                          <AlertCircle className="h-3 w-3 mr-1 text-amber-600" />
-                          รออนุมัติ
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center text-[10px] font-bold text-rose-700 bg-rose-50 px-2 py-0.5 rounded-full border border-rose-200">
-                          ปฏิเสธ
-                        </span>
-                      )
+                      <span className="inline-flex items-center text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                        <CheckCircle className="h-3 w-3 mr-1 text-emerald-600" />
+                        ยืนยันการจองแล้ว
+                      </span>
                     )}
 
                     {/* Room Badge */}
