@@ -420,18 +420,25 @@ export default function Dashboard({
         {/* Soft decorative warm/blue background subtle gradient */}
         <div className="absolute right-0 top-0 bottom-0 w-1/2 bg-gradient-to-l from-amber-100/30 via-blue-50/20 to-transparent pointer-events-none rounded-r-2xl" />
         
-        <div className="space-y-2 relative z-1">
-          <div className="flex items-center space-x-2">
-            <span className="bg-white text-blue-600 text-[11px] px-3 py-0.5 rounded-full border border-blue-200/60 font-semibold shadow-xs">
-              Meeting Room EC
-            </span>
+        <div className="space-y-2 relative z-1 flex items-start gap-4">
+          <img 
+            src="/logo.png" 
+            alt="Meeting Room EC" 
+            className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl shadow-sm object-cover ring-2 ring-white hidden sm:block shrink-0" 
+          />
+          <div className="space-y-1.5">
+            <div className="flex items-center space-x-2">
+              <span className="bg-white text-blue-600 text-[11px] px-3 py-0.5 rounded-full border border-blue-200/60 font-semibold shadow-xs">
+                Meeting Room EC
+              </span>
+            </div>
+            <h1 className="text-2xl sm:text-[26px] font-bold tracking-tight text-[#0F172A] leading-tight">
+              ระบบบริหารจัดการห้องประชุม EC
+            </h1>
+            <p className="text-slate-600 text-xs sm:text-sm max-w-2xl leading-relaxed">
+              จองห้องประชุม ค้นหาสล็อตเวลา ซิงค์ Google Calendar และสร้างลิงก์วิดีโอคอลได้ทันที
+            </p>
           </div>
-          <h1 className="text-2xl sm:text-[26px] font-bold tracking-tight text-[#0F172A] leading-tight">
-            ระบบบริหารจัดการห้องประชุม EC
-          </h1>
-          <p className="text-slate-600 text-xs sm:text-sm max-w-2xl leading-relaxed">
-            จองห้องประชุม ค้นหาสล็อตเวลา ซิงค์ Google Calendar และสร้างลิงก์วิดีโอคอลได้ทันที
-          </p>
         </div>
 
         {/* Realtime clock widget matching reference */}

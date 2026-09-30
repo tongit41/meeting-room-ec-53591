@@ -1565,13 +1565,18 @@ export default function App() {
 
         <div className="max-w-[430px] w-full bg-white/95 backdrop-blur-md rounded-[32px] p-6 sm:p-8 space-y-6 shadow-[0_20px_50px_rgba(0,0,0,0.06)] border border-white relative">
           
-          {/* Top Pill Badge */}
-          <div className="flex justify-center">
-            <div className="inline-flex items-center gap-1.5 px-3.5 py-1 rounded-full bg-gradient-to-r from-teal-50/90 via-indigo-50/90 to-purple-50/90 border border-indigo-100/80 shadow-2xs">
-              <div className="w-3.5 h-3.5 rounded-full bg-indigo-500/10 flex items-center justify-center text-indigo-600">
-                <Check className="w-2.5 h-2.5 stroke-[3]" />
-              </div>
-              <span className="text-[10px] font-bold tracking-wider text-slate-700 uppercase">MEETING ROOM EC</span>
+          {/* Logo & Top Pill Badge */}
+          <div className="flex flex-col items-center justify-center space-y-3">
+            <div className="relative">
+              <img 
+                src="/logo.png" 
+                alt="Meeting Room EC Logo" 
+                className="w-20 h-20 sm:w-24 sm:h-24 rounded-3xl shadow-lg object-cover ring-4 ring-blue-50 transition-transform hover:scale-105"
+              />
+            </div>
+            <div className="inline-flex items-center gap-1.5 px-3.5 py-1 rounded-full bg-blue-50/90 border border-blue-200/70 shadow-2xs">
+              <span className="w-2 h-2 rounded-full bg-blue-600 animate-pulse" />
+              <span className="text-[10.5px] font-bold tracking-wider text-blue-900 uppercase">MEETING ROOM EC</span>
             </div>
           </div>
 
@@ -1695,11 +1700,16 @@ export default function App() {
       
       {/* Sidebar Navigation - Left side (Slate 100 #F1F5F9) */}
       <aside className="hidden md:flex md:w-64 bg-[#F1F5F9] border-r border-slate-200 flex-col h-screen sticky top-0 shrink-0 shadow-2xs">
-        <div className="p-5 border-b border-slate-200 flex items-center gap-3">
-          <div className="w-8 h-8 bg-[#3B82F6] rounded-xl flex items-center justify-center text-white font-bold text-xs shadow-2xs">
-            EC
+        <div className="p-4 sm:p-5 border-b border-slate-200 flex items-center gap-3">
+          <img 
+            src="/logo.png" 
+            alt="Meeting Room EC" 
+            className="w-9 h-9 rounded-xl shadow-xs object-cover ring-2 ring-blue-100 shrink-0" 
+          />
+          <div className="min-w-0">
+            <h1 className="text-[#0F172A] font-bold text-sm tracking-tight leading-tight truncate">Meeting Room EC</h1>
+            <span className="text-[10.5px] text-slate-500 font-medium">ระบบจองห้องประชุม</span>
           </div>
-          <h1 className="text-[#0F172A] font-bold text-sm tracking-tight">Meeting Room EC</h1>
         </div>
         
         <nav className="flex-1 p-3 space-y-1.5">
@@ -1761,8 +1771,12 @@ export default function App() {
         {/* Mobile top bar (visible only on mobile) */}
         <header className="md:hidden bg-white border-b border-slate-200/80 sticky top-0 z-40">
           <div className="px-4 h-14 flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <div className="w-7 h-7 bg-blue-600 rounded-lg flex items-center justify-center text-white font-bold text-xs">EC</div>
+            <div className="flex items-center gap-2.5">
+              <img 
+                src="/logo.png" 
+                alt="Meeting Room EC" 
+                className="w-8 h-8 rounded-lg shadow-xs object-cover ring-2 ring-blue-100 shrink-0" 
+              />
               <span className="font-bold text-slate-800 text-xs tracking-wide">Meeting Room EC</span>
             </div>
             
